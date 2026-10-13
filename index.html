@@ -2,196 +2,162 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,interactive-widget=resizes-content">
 <title>Dispatch Scan Register</title>
 <meta name="theme-color" content="#0f6e64">
 <link rel="manifest" href="manifest.json">
 <link rel="icon" href="icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="icon.svg">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@75..100,600..800&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@500;600&display=swap">
-<style>
-/* Layout: packing-table tool. Scan bay + day tally on top, dispatch log, then export / packet codes / settings. */
-:root{
-  --bg:#f3f5f7; --panel:#ffffff; --ink:#16212b; --muted:#5b6875; --line:#d9e0e6;
-  --accent:#0f6e64; --accent-ink:#ffffff; --accent-soft:#e1f1ee;
-  --ok:#157a3c; --ok-soft:#e3f4e8; --bad:#b42318; --bad-soft:#fdecea; --warn:#9a5b00; --warn-soft:#fff3d6;
-  --fk:#1f5fd1; --fk-soft:#e6eefc; --ms:#a3297c; --ms-soft:#f8e7f2;
-  --f-display:"Archivo","Arial Narrow",system-ui,sans-serif;
-  --f-body:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
-  --f-mono:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace;
-  color-scheme:light;
-}
-@media (prefers-color-scheme:dark){:root{
-  --bg:#0f1418; --panel:#171e24; --ink:#e6edf2; --muted:#93a1ad; --line:#2a343d;
-  --accent:#3cbfae; --accent-ink:#06211d; --accent-soft:#143430;
-  --ok:#4cc77a; --ok-soft:#14301f; --bad:#ff7b6e; --bad-soft:#3a1714; --warn:#f0b54a; --warn-soft:#352812;
-  --fk:#7aa7ff; --fk-soft:#17264a; --ms:#f08acb; --ms-soft:#3a1730; color-scheme:dark}}
-*{box-sizing:border-box}
-html{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
-body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--f-body);font-size:15px;line-height:1.45}
-[hidden]{display:none!important}
-.wrap{max-width:1180px;margin:0 auto;padding:20px 16px 48px;display:grid;gap:18px}
-header{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:12px}
-h1{font-family:var(--f-display);font-stretch:80%;font-weight:800;font-size:30px;letter-spacing:.01em;margin:0;text-wrap:balance}
-h2{font-family:var(--f-display);font-stretch:85%;font-weight:700;font-size:18px;margin:0}
-.sub{color:var(--muted);margin:2px 0 0}
-.lbl{font-size:11.5px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);font-weight:600}
-.mono{font-family:var(--f-mono);font-variant-numeric:tabular-nums}
-.panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:18px}
-.top{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(0,1fr);gap:18px}
-@media (max-width:820px){.top{grid-template-columns:1fr}}
-input,select,button{font:inherit;color:inherit}
-input[type=date],input[type=text],input[type=url],input[type=password]{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px 10px;min-width:0}
-button{cursor:pointer;border-radius:8px;border:1px solid var(--line);background:var(--panel);padding:8px 14px;font-weight:600}
-button:hover{border-color:var(--muted)}
-button.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
-button:focus-visible,input:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
-button:disabled{opacity:.5;cursor:not-allowed}
-.bay{display:grid;gap:14px}
-.seg{display:inline-flex;border:1px solid var(--line);border-radius:9px;overflow:hidden}
-.seg button{border:0;border-radius:0;padding:9px 18px;background:transparent}
-.seg button[aria-pressed=true][data-p=Flipkart]{background:var(--fk);color:#fff}
-.seg button[aria-pressed=true][data-p=Meesho]{background:var(--ms);color:#fff}
-.steps{display:grid;grid-template-columns:1fr 1fr;gap:10px}
-.step{border:1.5px dashed var(--line);border-radius:9px;padding:10px 12px;min-width:0}
-.step.on{border-style:solid;border-color:var(--accent);background:var(--accent-soft)}
-.step.done{border-style:solid}
-.step .val{font-family:var(--f-mono);font-weight:600;font-size:16px;overflow-wrap:anywhere;min-height:1.5em}
-.step .val.empty{color:var(--muted);font-family:var(--f-body);font-weight:400;font-size:14px}
-.scanrow{display:flex;gap:8px;flex-wrap:wrap}
-#scan{flex:1 1 240px;font-family:var(--f-mono);font-size:22px;font-weight:600;padding:14px 16px;border:2px solid var(--accent);background:var(--panel);border-radius:10px}
-#camBox{border-radius:10px;overflow:hidden;background:#000;position:relative}
-#reader{width:100%;max-width:100%}
-#reader video{width:100%!important;height:auto!important;display:block}
-.flash{border-radius:9px;padding:12px 14px;font-weight:600;display:flex;gap:10px;align-items:baseline;flex-wrap:wrap}
-.flash small{font-weight:400;opacity:.85}
-.flash.ok{background:var(--ok-soft);color:var(--ok)}
-.flash.bad{background:var(--bad-soft);color:var(--bad)}
-.flash.warn{background:var(--warn-soft);color:var(--warn)}
-.flash.idle{background:var(--bg);color:var(--muted);font-weight:500}
-.hint{color:var(--muted);font-size:13px;margin:0}
-.tally{display:grid;gap:14px;align-content:start}
-.big{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
-.big div{border-top:3px solid var(--line);padding-top:6px}
-.big div.fk{border-color:var(--fk)} .big div.ms{border-color:var(--ms)} .big div.all{border-color:var(--accent)}
-.big b{display:block;font-family:var(--f-display);font-stretch:80%;font-size:34px;font-weight:800;line-height:1.05;font-variant-numeric:tabular-nums}
-table{width:100%;border-collapse:collapse}
-th,td{text-align:left;padding:7px 8px;border-bottom:1px solid var(--line);vertical-align:middle}
-th{font-size:11.5px;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);font-weight:600}
-td.n,th.n{text-align:right;font-variant-numeric:tabular-nums}
-.scroll{overflow-x:auto}
-.pill{display:inline-block;font-size:12px;font-weight:600;padding:2px 8px;border-radius:99px}
-.pill.Flipkart{background:var(--fk-soft);color:var(--fk)} .pill.Meesho{background:var(--ms-soft);color:var(--ms)}
-.pill.wait{background:var(--warn-soft);color:var(--warn)}
-.unk{color:var(--warn);font-style:italic}
-.linkbtn{border:0;background:none;padding:2px 4px;color:var(--accent);text-decoration:underline;font-weight:600}
-.del{padding:4px 10px;font-size:13px}
-.del.arm{background:var(--bad);color:#fff;border-color:var(--bad)}
-.head{display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between;margin-bottom:10px}
-.empty{color:var(--muted);text-align:center;padding:26px 10px}
-.lower{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:18px}
-.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
-.status{font-size:13px;color:var(--muted)}
-.dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--muted);margin-right:6px;vertical-align:1px}
-.dot.on{background:var(--ok)} .dot.off{background:var(--bad)} .dot.q{background:var(--warn)}
-.form{display:grid;gap:10px}
-.form label{display:grid;gap:4px}
-</style>
+<link rel="stylesheet" href="style.css">
 </head>
 <body>
-<div class="wrap">
-  <header>
-    <div>
-      <h1>Dispatch Scan Register</h1>
-      <p class="sub">Scan the AWB label, then the packet barcode. Each pair is saved to your Google Sheet as one dispatch.</p>
+
+<!-- ============ LOGIN ============ -->
+<main id="loginView" class="login" hidden>
+  <div class="login-card">
+    <div class="brand"><img src="icon.svg" alt="" width="44" height="44"><div><h1>Dispatch Scan Register</h1><p class="muted">Flipkart · Meesho packing</p></div></div>
+
+    <form id="loginForm" class="stack" autocomplete="on">
+      <label class="field"><span class="lbl">Your name</span><input id="lName" type="text" autocomplete="username" autocapitalize="words" required></label>
+      <label class="field"><span class="lbl">PIN</span><input id="lPin" type="password" inputmode="numeric" autocomplete="current-password" required></label>
+      <button class="btn primary big" type="submit" id="lBtn">Log in</button>
+      <p class="msg" id="lMsg" role="alert"></p>
+    </form>
+
+    <details id="devBox" class="device">
+      <summary><span class="dot" id="devDot"></span><span id="devState">Connect this device</span></summary>
+      <form id="devForm" class="stack">
+        <label class="field"><span class="lbl">Google Sheet Web app link</span><input id="dUrl" type="url" placeholder="https://script.google.com/macros/s/…/exec" spellcheck="false"></label>
+        <button class="btn" type="submit">Save and test</button>
+        <p class="msg" id="dMsg"></p>
+      </form>
+    </details>
+  </div>
+</main>
+
+<!-- ============ APP ============ -->
+<div id="app" class="app" hidden>
+  <header class="topbar">
+    <div class="seg" role="group" aria-label="Platform">
+      <button type="button" data-p="Flipkart" aria-pressed="true">Flipkart</button>
+      <button type="button" data-p="Meesho" aria-pressed="false">Meesho</button>
     </div>
-    <div class="row"><span class="lbl">Showing</span><input type="date" id="day" aria-label="Day to show"></div>
+    <div class="who">
+      <span class="conn" id="conn" title="Connection"><span class="dot"></span></span>
+      <button type="button" class="chip" id="userBtn" aria-haspopup="true"><span id="userName">—</span></button>
+      <div class="menu" id="userMenu" hidden>
+        <p class="muted small" id="userRole"></p>
+        <button type="button" class="btn" id="logoutBtn">Log out</button>
+      </div>
+    </div>
   </header>
 
-  <section class="panel" id="setupNote" hidden>
-    <h2>Connect your Google Sheet first</h2>
-    <p class="hint" style="margin:6px 0 0">Open <b>Settings</b> at the bottom of this page and paste the Web app URL and app key from your Sheet's script. The setup guide (README) explains each step.</p>
+  <!-- SCAN -->
+  <section class="view" id="v-scan">
+    <div class="stage idle" id="stage">
+      <video id="video" playsinline muted></video>
+      <div id="fallbackReader"></div>
+      <div class="guide" aria-hidden="true"><span></span></div>
+      <div class="stage-idle" id="stageIdle">
+        <button type="button" class="btn primary big" id="camStart">Start camera</button>
+        <p class="small">Or scan with a barcode gun. No need to tap anything.</p>
+      </div>
+      <div class="stage-tools" id="stageTools" hidden>
+        <button type="button" class="tool" id="torchBtn" hidden>Light</button>
+        <button type="button" class="tool" id="zoomBtn" hidden>2×</button>
+        <button type="button" class="tool" id="camStop">Stop</button>
+      </div>
+      <div class="pick" id="pick" hidden>
+        <p id="pickTitle">More than one barcode. Tap the AWB:</p>
+        <div class="pick-list" id="pickList"></div>
+      </div>
+      <div class="hit" id="hit" aria-hidden="true"></div>
+    </div>
+
+    <div class="steps">
+      <div class="step on" id="s1"><span class="lbl">1 · AWB number</span><span class="val empty" id="v1">Scan the courier label</span></div>
+      <div class="step" id="s2"><span class="lbl">2 · Packet barcode</span><span class="val empty" id="v2">Then scan the packet</span></div>
+    </div>
+
+    <div class="flash idle" id="flash" role="status" aria-live="polite"><b>Ready.</b> <span>Scan the AWB on the shipping label.</span></div>
+
+    <form class="manual" id="manualForm">
+      <input type="text" id="manual" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="Type a code" aria-label="Type a code">
+      <button class="btn" type="submit">Enter</button>
+      <button class="btn ghost" type="button" id="resetBtn">Reset</button>
+    </form>
+
+    <div class="mini">
+      <span>Today</span><b id="mAll">0</b>
+      <span class="fk">Flipkart</span><b id="mFk">0</b>
+      <span class="ms">Meesho</span><b id="mMs">0</b>
+      <span class="q" id="mQ" hidden></span>
+    </div>
   </section>
 
-  <div class="top">
-    <section class="panel bay" aria-label="Scan">
-      <div class="row" style="justify-content:space-between">
-        <div class="seg" role="group" aria-label="Platform">
-          <button type="button" data-p="Flipkart" aria-pressed="true">Flipkart</button>
-          <button type="button" data-p="Meesho" aria-pressed="false">Meesho</button>
-        </div>
-        <span class="status" id="conn"><span class="dot"></span>Not connected</span>
-      </div>
-      <div class="steps">
-        <div class="step on" id="s1"><div class="lbl">1 · AWB number</div><div class="val empty" id="v1">Scan the courier label</div></div>
-        <div class="step" id="s2"><div class="lbl">2 · Packet barcode</div><div class="val empty" id="v2">Then scan the packet</div></div>
-      </div>
-      <div id="camBox" hidden><div id="reader"></div></div>
-      <div class="scanrow">
-        <input type="text" id="scan" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="Scan AWB…" aria-label="Scanner input">
-        <button type="button" id="camBtn" class="primary">Use camera</button>
-        <button type="button" id="cancel">Reset</button>
-      </div>
-      <div class="flash idle" id="flash" role="status" aria-live="polite">Ready. Scan with a barcode gun, tap "Use camera", or type a code and press Enter.</div>
-      <p class="hint">AWBs starting with FMP switch to Flipkart automatically. Duplicate AWBs are blocked. If the internet drops, scans are kept on this device and uploaded later.</p>
-    </section>
-
-    <section class="panel tally" aria-label="Day total">
-      <h2 id="tallyTitle">Today's dispatch</h2>
-      <div class="big">
-        <div class="all"><span class="lbl">Total</span><b id="tAll">0</b></div>
-        <div class="fk"><span class="lbl">Flipkart</span><b id="tFk">0</b></div>
-        <div class="ms"><span class="lbl">Meesho</span><b id="tMs">0</b></div>
-      </div>
-      <div class="scroll"><table><thead><tr><th>Product</th><th class="n">Flipkart</th><th class="n">Meesho</th><th class="n">Total</th></tr></thead><tbody id="byProd"></tbody></table></div>
-    </section>
-  </div>
-
-  <section class="panel" aria-label="Dispatch log">
-    <div class="head"><h2 id="logTitle">Dispatch log</h2><div class="row"><span class="status" id="logCount"></span><button type="button" id="refresh">Refresh</button></div></div>
-    <div class="scroll"><table>
-      <thead><tr><th>Time</th><th>Platform</th><th>AWB</th><th>Packet</th><th>Product</th><th>By</th><th></th></tr></thead>
-      <tbody id="log"></tbody>
-    </table></div>
+  <!-- TODAY -->
+  <section class="view" id="v-today" hidden>
+    <div class="row between">
+      <h2 id="dayTitle">Today</h2>
+      <input type="date" id="day" aria-label="Day to show">
+    </div>
+    <div class="totals">
+      <div class="all"><span class="lbl">Total</span><b id="tAll">0</b></div>
+      <div class="fk"><span class="lbl">Flipkart</span><b id="tFk">0</b></div>
+      <div class="ms"><span class="lbl">Meesho</span><b id="tMs">0</b></div>
+    </div>
+    <div class="card"><div class="scroll"><table>
+      <thead><tr><th>Product</th><th class="n">FK</th><th class="n">MS</th><th class="n">Total</th></tr></thead>
+      <tbody id="byProd"></tbody></table></div></div>
+    <div class="row between"><h2>Dispatch log</h2><span class="muted small" id="logCount"></span></div>
+    <div class="card"><div class="scroll"><table class="log">
+      <thead><tr><th>Time</th><th>AWB</th><th>Product · by</th><th></th></tr></thead>
+      <tbody id="log"></tbody></table></div></div>
   </section>
 
-  <div class="lower">
-    <section class="panel" aria-label="Export">
-      <h2>Download Excel</h2>
-      <p class="hint" style="margin:6px 0 12px">One sheet with every dispatch, one with totals by date, platform and product. The Google Sheet itself also stays up to date.</p>
+  <!-- EXCEL -->
+  <section class="view" id="v-excel" hidden>
+    <h2>Download Excel</h2>
+    <p class="muted">You get two sheets: every dispatch, and totals by date, platform and product. Your Google Sheet also stays up to date by itself.</p>
+    <div class="card stack">
+      <div class="quick">
+        <button type="button" class="chip" data-range="0">Today</button>
+        <button type="button" class="chip" data-range="1">Yesterday</button>
+        <button type="button" class="chip" data-range="7">Last 7 days</button>
+        <button type="button" class="chip" data-range="m">This month</button>
+      </div>
       <div class="row">
-        <label class="lbl" for="from">From</label><input type="date" id="from">
-        <label class="lbl" for="to">To</label><input type="date" id="to">
-        <button class="primary" type="button" id="export">Download .xlsx</button>
+        <label class="field grow"><span class="lbl">From</span><input type="date" id="from"></label>
+        <label class="field grow"><span class="lbl">To</span><input type="date" id="to"></label>
       </div>
-      <p class="status" id="expMsg" style="margin:10px 0 0"></p>
-    </section>
+      <button class="btn primary big" type="button" id="exportBtn">Download .xlsx</button>
+      <p class="msg" id="expMsg"></p>
+    </div>
+  </section>
 
-    <section class="panel" aria-label="Packet codes">
-      <h2>Packet codes</h2>
-      <p class="hint" style="margin:6px 0 12px">Name each packet barcode once and every scan of it gets the product name.</p>
-      <form class="row" id="prodForm">
-        <input type="text" id="pCode" placeholder="Packet barcode" class="mono" style="flex:1 1 140px" aria-label="Packet barcode">
-        <input type="text" id="pName" placeholder="e.g. Baby Pants M 30" style="flex:2 1 180px" aria-label="Product name">
-        <button type="submit" class="primary">Save</button>
-      </form>
-      <div class="scroll" style="margin-top:10px"><table><tbody id="prods"></tbody></table></div>
-    </section>
+  <!-- CODES (admin) -->
+  <section class="view" id="v-codes" hidden>
+    <h2>Packet codes</h2>
+    <p class="muted">Name each packet barcode once. Every scan of it then shows the product.</p>
+    <form class="card stack" id="prodForm">
+      <label class="field"><span class="lbl">Packet barcode</span><input type="text" id="pCode" class="mono" autocomplete="off" spellcheck="false"></label>
+      <label class="field"><span class="lbl">Product name</span><input type="text" id="pName" placeholder="e.g. Baby Pants M 30"></label>
+      <button type="submit" class="btn primary">Save code</button>
+    </form>
+    <div class="card"><div class="scroll"><table><tbody id="prods"></tbody></table></div></div>
+  </section>
 
-    <section class="panel" aria-label="Settings">
-      <h2>Settings</h2>
-      <form class="form" id="setForm" style="margin-top:12px">
-        <label><span class="lbl">Google Sheet Web app URL</span><input type="url" id="sUrl" placeholder="https://script.google.com/macros/s/…/exec" spellcheck="false"></label>
-        <label><span class="lbl">App key (same as APP_KEY in the script)</span><input type="password" id="sKey" autocomplete="off"></label>
-        <label><span class="lbl">This device / packer name</span><input type="text" id="sBy" placeholder="e.g. Packing table 1"></label>
-        <div class="row"><button type="submit" class="primary">Save and test</button><span class="status" id="setMsg"></span></div>
-      </form>
-    </section>
-  </div>
+  <nav class="tabs" aria-label="Sections">
+    <button type="button" data-view="scan" aria-current="page"><svg viewBox="0 0 24 24"><path d="M3 7V4h3M21 7V4h-3M3 17v3h3M21 17v3h-3M7 8v8M10 8v8M13 8v8M17 8v8"/></svg>Scan</button>
+    <button type="button" data-view="today"><svg viewBox="0 0 24 24"><path d="M4 5h16M4 12h16M4 19h10"/></svg>Today</button>
+    <button type="button" data-view="excel"><svg viewBox="0 0 24 24"><path d="M12 4v11m0 0-4-4m4 4 4-4M5 20h14"/></svg>Excel</button>
+    <button type="button" data-view="codes" id="codesTab"><svg viewBox="0 0 24 24"><path d="M4 7h10M4 12h16M4 17h7M17 4l3 3-3 3"/></svg>Codes</button>
+  </nav>
 </div>
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js"></script>
-<script src="app.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js" defer></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js" defer></script>
+<script src="app.js" defer></script>
 </body>
 </html>
