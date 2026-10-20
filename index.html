@@ -48,6 +48,8 @@
       <button type="button" class="chip" id="userBtn" aria-haspopup="true"><span id="userName">—</span></button>
       <div class="menu" id="userMenu" hidden>
         <p class="muted small" id="userRole"></p>
+        <p class="small" id="syncLine">Flipkart not connected</p>
+        <button type="button" class="btn" id="syncBtn" hidden>Sync Flipkart now</button>
         <button type="button" class="btn" id="logoutBtn">Log out</button>
       </div>
     </div>
@@ -139,10 +141,11 @@
   <!-- CODES (admin) -->
   <section class="view" id="v-codes" hidden>
     <h2>Packet codes</h2>
-    <p class="muted">Name each packet barcode once. Every scan of it then shows the product.</p>
+    <p class="muted">Link each packet barcode to its SKU once. After that, every parcel is checked against the Flipkart order.</p>
     <form class="card stack" id="prodForm">
       <label class="field"><span class="lbl">Packet barcode</span><input type="text" id="pCode" class="mono" autocomplete="off" spellcheck="false"></label>
       <label class="field"><span class="lbl">Product name</span><input type="text" id="pName" placeholder="e.g. Baby Pants M 30"></label>
+      <label class="field"><span class="lbl">SKU (same as in Flipkart / Meesho listing)</span><input type="text" id="pSku" class="mono" autocomplete="off" spellcheck="false" placeholder="e.g. BP-M-30"></label>
       <button type="submit" class="btn primary">Save code</button>
     </form>
     <div class="card"><div class="scroll"><table><tbody id="prods"></tbody></table></div></div>

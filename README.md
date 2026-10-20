@@ -1,87 +1,79 @@
 # Dispatch Scan Register
 
-Scan the **AWB label** and then the **packet barcode** of every Flipkart or Meesho parcel. Each pair is saved as one row in your Google Sheet, with date, time, platform, product and packer name. Download any date range as Excel.
+Scan the **AWB label** and then the **packet barcode** of every Flipkart or Meesho parcel. Each pair is saved as one row in your Google Sheet with date, time, platform, product and who scanned it. Download any date range as Excel.
 
-- Works on any phone or PC in Chrome.
+App link: https://ekanshj2003.github.io/dispatch-scanner/
+
+- Each packer logs in with their own name and PIN.
 - Scan with the phone camera, a USB/Bluetooth barcode gun, or by typing.
+- The camera only reads barcodes inside the white box and waits for a clear read. If a label has more than one barcode, it asks you to tap the right one and remembers your choice.
 - Duplicate AWBs are blocked.
 - If the internet drops, scans are kept on the phone and uploaded later.
-- All packers share one Google Sheet, so totals are always live.
-
-Setup takes about 15 minutes, once.
 
 ---
 
-## Part 1 – Google Sheet (where data is saved)
+## Part 1 – Google Sheet (one time)
 
-1. Go to **sheets.google.com** and create a new blank sheet. Name it `Dispatch Register`.
-2. In the menu click **Extensions → Apps Script**.
-3. Delete everything in the editor. Open `google-sheet-script/Code.gs` from this folder, copy all of it, and paste it in.
-4. On the line `const APP_KEY = 'change-me';` replace `change-me` with your own secret word, for example `jain2026pack`. Keep it private.
-5. Click the **Save** icon.
-6. In the function dropdown at the top choose **setup**, then click **Run**.
-   - Google asks for permission. Click **Review permissions**, choose your account, then **Advanced → Go to project (unsafe) → Allow**. This warning appears because you wrote the script yourself.
-   - Your Sheet now has three tabs: **Dispatch**, **Products**, **Summary**.
-7. Click **Deploy → New deployment**.
-   - Click the gear icon → **Web app**.
-   - Execute as: **Me**
-   - Who has access: **Anyone**
-   - Click **Deploy** and copy the **Web app URL** (it ends with `/exec`).
+1. Create a blank Google Sheet named `Dispatch Register`.
+2. **Extensions → Apps Script**. Delete everything, paste all of `google-sheet-script/Code.gs`, click **Save**.
+3. Pick **setup** in the function list and click **Run**. Allow the permissions (**Advanced → Go to project → Allow**).
+4. Open the new **Users** tab in the Sheet:
+   - Change the Admin PIN from `1234` to your own.
+   - Add one row per packer: Name, PIN, Role `packer`, Active `YES`.
+   - Role `admin` can delete scans and name packet codes. Set Active to `NO` to block someone.
+5. **Deploy → New deployment →** gear icon **→ Web app**. Execute as **Me**, Who has access **Anyone**. **Deploy**, then copy the link ending in `/exec`.
 
-## Part 2 – Put the app on GitHub
+Already deployed the old script? Paste the new code, run **setup** again, then **Deploy → Manage deployments → ✏️ → Version: New version → Deploy**. The link stays the same.
 
-1. Sign in at **github.com**.
-2. Click **+** (top right) → **New repository**.
-   - Name: `dispatch-scanner`
-   - Choose **Public** (free GitHub Pages needs a public repo; your scan data stays in your Google Sheet, not on GitHub).
-   - Click **Create repository**.
-3. On the new repo page click **uploading an existing file**.
-4. Drag in these files from this folder: `index.html`, `app.js`, `manifest.json`, `icon.svg`, `README.md`. (You can also drag the `google-sheet-script` folder for safekeeping.) Click **Commit changes**.
-5. Go to **Settings → Pages**.
-   - Source: **Deploy from a branch**
-   - Branch: **main**, folder **/ (root)** → **Save**.
-6. Wait 1–2 minutes and refresh. Your app link appears at the top, like
-   `https://YOUR-USERNAME.github.io/dispatch-scanner/`
+## Part 2 – Each phone (one time)
 
-## Part 3 – Connect the app
-
-1. Open the app link on your phone in **Chrome**.
-2. Scroll to **Settings**:
-   - Paste the **Web app URL** from Part 1.
-   - Type the same **app key** you put in the script.
-   - Type a name for this phone, for example `Packing table 1`.
-   - Tap **Save and test**. It should say **Connected**.
-3. Chrome menu (⋮) → **Add to Home screen**, so it opens like an app.
-4. Repeat Part 3 on every phone or PC that will scan.
+1. Open the app link in **Chrome**.
+2. Tap **Connect this device**, paste the `/exec` link, tap **Save and test**.
+3. Log in with your name and PIN. You stay logged in for 30 days.
+4. Chrome menu (⋮) → **Add to Home screen**.
 
 ## Daily use
 
-1. Choose **Flipkart** or **Meesho**. AWBs starting with `FMP` switch to Flipkart automatically.
-2. Scan the **AWB barcode** on the shipping label.
-3. Scan the **barcode on the packet**.
-4. A green message and beep mean it is saved. Red with a long buzz means a problem (for example, a duplicate AWB).
+1. Pick **Flipkart** or **Meesho** at the top. AWBs starting with `FMP` switch to Flipkart by themselves.
+2. Tap **Start camera** (only the first time; after that it starts by itself).
+3. Hold the AWB barcode inside the white box. Beep and green flash = captured.
+4. Hold the packet barcode inside the box. **✓ Saved** = done.
+5. Red message with a long buzz = problem (for example a duplicate AWB).
 
-Tips:
-- **Camera:** tap **Use camera** and allow camera access. Hold the label flat, with the AWB barcode inside the box. Flipkart and Meesho labels have several barcodes, so aim at the one printed under or above the AWB number.
-- **Barcode gun:** click once in the big scan box and scan. The gun types the code and presses Enter by itself. This is the fastest way for high volume.
-- **Packet codes:** name each packet barcode once under **Packet codes** (for example `Baby Pants M 30`). Earlier scans of that barcode get the name too.
-- **Mistake?** Tap **Delete** on the row, then **Confirm**.
+Camera tips:
+- Hold the phone 15–25 cm away, label flat, barcode lying across the box.
+- Dark godown? Tap **Light**. Small barcode? Tap **2×**.
+- On a Bluetooth barcode gun, just scan. No need to tap anything.
 
-## Excel
+## Flipkart order check (optional)
 
-- In the app: choose From and To dates → **Download .xlsx**. You get a **Dispatch** sheet (every parcel) and a **Summary** sheet (count by date, platform and product).
-- Or open the Google Sheet anytime: **File → Download → Microsoft Excel (.xlsx)**. The **Summary** tab updates by itself.
+When connected, scanning an AWB shows what should be inside the parcel, and a wrong packet is blocked with a red warning.
 
-## Changing the script later
+1. Flipkart Seller Hub → **Manage Profile → Developer Access → Self Access → Create New Access**. Keep the API key and secret private.
+2. In Apps Script, click the **gear icon (Project Settings)** on the left → **Script Properties** → **Add script property**:
+   - `FK_APP_ID` = the API key / Application ID
+   - `FK_APP_SECRET` = the secret
+   Click **Save script properties**.
+3. Choose **setup** and click **Run**. Allow the new permission (it now contacts Flipkart). The log at the bottom should say **Flipkart connected**.
+4. **Deploy → Manage deployments → ✏️ → Version: New version → Deploy**.
+5. In the app, open **Codes** and add the **SKU** for each packet barcode (the same SKU as your Flipkart listing). Or just scan: after a parcel, the admin is asked "Is it …?" and one tap links it.
 
-If you edit `Code.gs`, go to **Deploy → Manage deployments → ✏️ Edit → Version: New version → Deploy**. The URL stays the same.
+Orders refresh every 15 minutes. An admin can tap their name → **Sync Flipkart now**. The **Orders** tab in the Sheet shows what was pulled.
+
+## Tabs
+
+- **Scan** – the scanner and today's count.
+- **Today** – totals by product and the full log. Pick any date at the top.
+- **Excel** – choose dates and download. Sheet 1 has every parcel, Sheet 2 has totals.
+- **Codes** (admin only) – name each packet barcode once, e.g. `Baby Pants M 30`.
 
 ## Problems
 
 | What you see | What to do |
 |---|---|
-| "Wrong app key" | The key in Settings must match `APP_KEY` in the script exactly. |
-| "Sheet missing. Run setup once" | Run the `setup` function in Apps Script (Part 1, step 6). |
-| Camera does not start | Open the app with the `https://…github.io` link, not a downloaded file. Allow camera in Chrome site settings. |
-| "Waiting to upload" stays | The phone is offline. Scans upload by themselves when the internet returns, or tap **Refresh**. |
-| Could not connect | Check the URL ends with `/exec` and the deployment's access is **Anyone**. |
+| "Name or PIN is wrong" | Check the Users tab. Names are not case-sensitive. |
+| "Too many wrong PINs" | Wait 10 minutes. |
+| "Paste the new Code.gs" | The Sheet still has the old script. See Part 1, last line. |
+| Camera does not start | Chrome → ⋮ → Settings → Site settings → Camera → allow the app. |
+| It asks "Tap the AWB" | Tap the right number once. Next time it chooses by itself. |
+| "Waiting to upload" | Phone is offline. It uploads by itself when internet is back. |
