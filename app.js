@@ -915,6 +915,37 @@
     } catch (err) { setHTML($('mfDone'), `<tr><td class="empty">${esc(err.message)}</td></tr>`); }
   }
 
+  /* ================= install on the phone ================= */
+  // Chrome shows its own "Install app" offer only now and then; this button lets the packer install any time.
+  let installEvt = null;
+  const standalone = () => window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
+  function showInstall() {
+    const show = !standalone();
+    ['installBtn', 'installBtn2'].forEach(id => { const b = $(id); if (b) b.hidden = !show; });
+  }
+  window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); installEvt = e; showInstall(); });
+  window.addEventListener('appinstalled', () => { installEvt = null; ['installBtn', 'installBtn2'].forEach(id => { const b = $(id); if (b) b.hidden = true; }); });
+  async function doInstall() {
+    $('userMenu').hidden = true;
+    if (installEvt) {
+      installEvt.prompt();
+      try { await installEvt.userChoice; } catch (e) {}
+      installEvt = null;
+      return;
+    }
+    const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent);
+    const how = isIOS ? 'In Safari tap Share (square with arrow), then "Add to Home Screen".'
+      : 'In Chrome tap the ⋮ menu (top right), then "Install app" or "Add to Home screen".';
+    if (!$('app').hidden) flash('idle', 'Install from the browser menu', how);
+    else { $('lMsg').className = 'msg'; $('lMsg').textContent = how; }
+  }
+  $('installBtn').onclick = doInstall;
+  $('installBtn2').onclick = doInstall;
+  showInstall();
+  if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
+    window.addEventListener('load', () => { navigator.serviceWorker.register('sw.js').catch(() => {}); });
+  }
+
   /* ================= start ================= */
   $('day').value = today(); $('from').value = today(); $('to').value = today();
   renderSteps(); render();
