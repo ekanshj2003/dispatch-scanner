@@ -55,6 +55,21 @@ Camera tips:
 
 When **Meesho** is selected, tap the delivery partner under the top bar (Valmo, Delhivery, Shadowfax…) before scanning. The app remembers it until you change it. Edit the list in the Sheet's **Settings** tab. The **Today** tab shows parcels per delivery partner.
 
+## Cancelled at pickup
+
+Open the **Cancel** tab, pick a reason (Order cancelled, Courier did not pick up, Damaged, Other) and scan the parcel's AWB (camera, barcode gun, or type it).
+- The parcel is marked **Cancelled** in the Sheet (Status column) and left out of all totals and manifest counts.
+- The AWB stays blocked. Its **packet barcode can be used again**.
+- An admin can tap **Undo** if it was cancelled by mistake.
+
+## Deleting a wrong entry
+
+In **Today** (admin), tap **Delete** then **Sure?**. Both the AWB and the packet barcode can be scanned again straight away, on every phone. Every delete and cancel is recorded in the Sheet's **Changes Log** tab.
+
+## Search
+
+Type or scan any part of an AWB or packet barcode in the box at the top of **Today**. It searches all dates and shows the status, delivery partner and who scanned it, with Cancel / Undo / Delete buttons.
+
 ## Signed manifest
 
 Open the **Manifest** tab, pick the platform and delivery partner, tap **Take photo or choose file** (one photo per page, or a PDF) and tap **Upload**. Files are saved in Google Drive › **Dispatch Manifests** › today's date, and listed in the Sheet's **Manifests** tab with the number of parcels scanned for that partner.

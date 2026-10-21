@@ -70,8 +70,8 @@ button:focus-visible,input:focus-visible,summary:focus-visible{outline:3px solid
 .conn{display:inline-flex;padding:4px}
 .menu{position:absolute;right:0;top:calc(100% + 6px);background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px;display:grid;gap:10px;min-width:230px;max-width:min(320px,90vw);box-shadow:0 8px 24px rgb(0 0 0 / .14);z-index:20}
 .view{overflow-y:auto;padding:4px 16px 18px;display:grid;gap:14px;align-content:start;-webkit-overflow-scrolling:touch}
-.tabs{display:grid;grid-template-columns:repeat(5,1fr);background:var(--panel);border-top:1px solid var(--line);padding-bottom:env(safe-area-inset-bottom,0px)}
-.tabs.three{grid-template-columns:repeat(4,1fr)}
+.tabs{display:grid;grid-template-columns:repeat(6,1fr);background:var(--panel);border-top:1px solid var(--line);padding-bottom:env(safe-area-inset-bottom,0px)}
+.tabs.three{grid-template-columns:repeat(5,1fr)}
 .tabs button{border:0;background:none;padding:8px 4px 9px;display:grid;justify-items:center;gap:2px;font-size:12px;font-weight:600;color:var(--muted);cursor:pointer}
 .tabs svg{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
 .tabs button[aria-current=page]{color:var(--accent)}
@@ -168,3 +168,21 @@ select{width:100%;font:inherit;font-size:16px;color:inherit;background:var(--bg)
 .mf-files li.ok{border-color:var(--ok);color:var(--ok)} .mf-files li.bad{border-color:var(--bad);color:var(--bad)}
 .tabs button{font-size:11.5px}
 .by{display:block;font-size:12px;color:var(--muted)}
+
+/* ---------- search ---------- */
+.search{display:flex;align-items:center;gap:8px;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:4px 6px 4px 12px}
+.search svg{width:20px;height:20px;flex:none;fill:none;stroke:var(--muted);stroke-width:2;stroke-linecap:round}
+.search input{border:0;background:transparent;padding:9px 4px;font-family:var(--f-mono);flex:1;min-width:0}
+.search input:focus-visible{outline:none}
+.search:focus-within{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent-soft)}
+.search .btn{padding:6px 10px}
+
+/* ---------- cancel ---------- */
+.reasons{display:flex;align-items:center;gap:10px;min-width:0}
+.reasons .lbl{flex:none}
+#reasonChips button[aria-pressed=true]{background:var(--bad);border-color:var(--bad);color:#fff}
+.pill.cx{background:var(--bad-soft);color:var(--bad)}
+tr.cancelled .awb{text-decoration:line-through;opacity:.75}
+.cancel-note{font-size:13.5px;color:var(--bad);font-weight:600}
+.acts{display:flex;flex-direction:column;gap:4px;align-items:flex-end}
+.tabs button{font-size:11px;padding-left:2px;padding-right:2px}

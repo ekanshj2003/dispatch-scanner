@@ -1,4 +1,4 @@
-/* Dispatch Scan Register – app logic (v6: never-repeat codes, delivery partner, signed manifests).
+/* Dispatch Scan Register – app logic (v7: cancel at pickup, search, delete frees codes).
    Talks to the Google Sheet script in google-sheet-script/Code.gs. */
 (function () {
   'use strict';
@@ -33,6 +33,7 @@
   let pendingOrder = null;
   // Every AWB / packet code ever saved (code -> date). Kept on the phone so a repeat is blocked instantly.
   let used = store.get('used', { a: {}, p: {}, ts: 0 });
+  used.c = used.c || {}; used.ets = used.ets || 0;     // c = cancelled AWBs, ets = last change seen
   let cfg2 = store.get('settings', { meeshoCouriers: ['Valmo', 'Delhivery', 'Shadowfax', 'Xpressbees', 'Ecom Express', 'DTDC'], flipkartCouriers: ['Ekart', 'Delhivery', 'Shadowfax', 'Xpressbees'], uniquePacket: true });
   let courier = store.get('courier', '');
   let step = 1, pendingAwb = '', labelCodes = new Set(), busy = false, online = null;
@@ -101,7 +102,7 @@
     try {
       const r = await fetch(u + '?action=ping'); const j = await r.json();
       if (!j.ok || j.app !== 'dispatch-scanner') throw new Error('That link is not the dispatch script.');
-      if (!(j.v >= 4)) throw new Error('Paste the new Code.gs and deploy a new version.');
+      if (!(j.v >= 5)) throw new Error('Paste the new Code.gs and deploy a new version.');
       url = u; store.set('url', url);
       $('dMsg').className = 'msg ok'; $('dMsg').textContent = 'Connected. Now log in.';
       $('devDot').className = 'dot on'; $('devState').textContent = 'Device connected to Google Sheet';
@@ -132,10 +133,12 @@
   let current = 'scan';
   function go(view) {
     current = view;
-    ['scan', 'today', 'manifest', 'excel', 'codes'].forEach(v => { $('v-' + v).hidden = v !== view; });
+    ['scan', 'today', 'cancel', 'manifest', 'excel', 'codes'].forEach(v => { $('v-' + v).hidden = v !== view; });
+    placeStage(view);
+    if (view === 'cancel') { renderReasons(); loadCancelled(); }
     if (view === 'manifest') { $('mfPlatform').value = platform; fillMfCouriers(true); loadManifests(); }
     document.querySelectorAll('.tabs button').forEach(b => b.toggleAttribute('aria-current', b.dataset.view === view));
-    if (view === 'scan') maybeAutoStartCam(); else stopCam();
+    if (view === 'scan' || view === 'cancel') maybeAutoStartCam(); else stopCam();
     if (view === 'today') { if (viewDay === today()) { viewRows = todayRows; render(); } else loadView(); }
     if (view === 'codes') render();
   }
@@ -237,7 +240,14 @@
   /* ================= saving a scan ================= */
   const fmtDay = d => d === today() ? 'today' : d ? 'on ' + d.split('-').reverse().join('-') : 'before';
   const usedAwbDay = c => used.a[c] || (queue.find(r => r.awb === c) || {}).date || (todayRows.find(r => r.awb === c) || {}).date || '';
-  const usedPktDay = c => used.p[c] || (queue.find(r => r.packet === c) || {}).date || (todayRows.find(r => r.packet === c) || {}).date || '';
+  const usedPktDay = c => used.p[c] || (queue.find(r => r.packet === c) || {}).date || (todayRows.find(r => r.packet === c && r.status !== 'Cancelled') || {}).date || '';
+  // Apply a delete / cancel / undo to the phone's list of used codes.
+  function applyEvent(ev) {
+    if (!ev || !ev.awb) return;
+    if (ev.type === 'deleted') { delete used.a[ev.awb]; if (ev.packet) delete used.p[ev.packet]; delete used.c[ev.awb]; }
+    else if (ev.type === 'cancelled') { used.a[ev.awb] = used.a[ev.awb] || ev.date || ev.at; if (ev.packet) delete used.p[ev.packet]; used.c[ev.awb] = ev.at || today(); }
+    else if (ev.type === 'uncancelled') { used.a[ev.awb] = used.a[ev.awb] || ev.date || ev.at; if (ev.packet) used.p[ev.packet] = ev.date || ev.at; delete used.c[ev.awb]; }
+  }
   const knownAwb = c => !!usedAwbDay(c);
   function markUsed(rec) {
     used.a[rec.awb] = rec.date; used.p[rec.packet] = rec.date;
@@ -247,10 +257,12 @@
   async function accept(code) {
     code = String(code || '').trim();
     if (!code || busy) return;
+    if (current === 'cancel') return cancelCode(code);
     busy = true;
     try {
       if (step === 1) {
         const aDay = usedAwbDay(code), pDay = usedPktDay(code);
+        if (aDay && used.c[code]) { flash('bad', '✗ AWB ' + code + ' was cancelled', 'Cancelled ' + fmtDay(used.c[code]) + '. A cancelled AWB cannot be dispatched again.'); beep(false); pulse(false); return; }
         if (aDay) { flash('bad', '✗ AWB ' + code + ' already scanned', 'It was dispatched ' + fmtDay(aDay) + '. An AWB can be scanned only once.'); beep(false); pulse(false); return; }
         if (pDay || products[code]) { flash('bad', '✗ That is a packet barcode', (pDay ? 'Already used ' + fmtDay(pDay) + '. ' : '') + 'Scan the AWB on the shipping label first.'); beep(false); pulse(false); return; }
         const ord = findOrder(code);
@@ -307,14 +319,17 @@
   // Catch that anywhere on the Scan screen, so no box needs focus and the phone keyboard never opens.
   let kb = '', kbFirst = 0, kbLast = 0;
   document.addEventListener('keydown', e => {
-    if ($('app').hidden || current !== 'scan') return;
+    if ($('app').hidden || !['scan', 'cancel', 'today'].includes(current)) return;
     const t = e.target;
-    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA')) return;
+    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT')) return;
     const now = performance.now();
     if (now - kbLast > 100) { kb = ''; kbFirst = now; }
     kbLast = now;
     if (e.key === 'Enter') {
-      if (kb.length >= 4 && (now - kbFirst) < kb.length * 70 + 200) { e.preventDefault(); accept(kb); }
+      if (kb.length >= 4 && (now - kbFirst) < kb.length * 70 + 200) {
+        e.preventDefault();
+        if (current === 'today') { $('q').value = kb; runSearch(); } else accept(kb);
+      }
       kb = ''; return;
     }
     if (e.key.length === 1) kb += e.key;
@@ -418,7 +433,9 @@
         return v && (v.hits >= 2 || SAFE.has(format)) && !(recent.has(code) && now - recent.get(code) < 4000);
       });
     if (!ready.length) return;
-    const pick = choose(ready);
+    const pick = current === 'cancel'
+      ? ((ready.find(c => usedAwbDay(c.code)) || (ready.length === 1 ? ready[0] : null)) || {}).code
+      : choose(ready);
     if (pick) {
       recent.set(pick, now); cooldown(450);
       $('stage').classList.add('locked'); setTimeout(() => $('stage').classList.remove('locked'), 400);
@@ -603,7 +620,7 @@
   }
 
   async function maybeAutoStartCam() {
-    if (camOn || current !== 'scan' || $('app').hidden) return;
+    if (camOn || (current !== 'scan' && current !== 'cancel') || $('app').hidden) return;
     let granted = false;
     try { granted = (await navigator.permissions.query({ name: 'camera' })).state === 'granted'; } catch (e) { granted = false; }
     if (granted && store.get('camOK', false)) startCam();
@@ -624,11 +641,27 @@
   };
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) { if (camOn) { stopCam(); resumeCam = true; } }
-    else if (resumeCam) { resumeCam = false; if (current === 'scan') startCam(); }
+    else if (resumeCam) { resumeCam = false; if (current === 'scan' || current === 'cancel') startCam(); }
   });
   let resumeCam = false;
 
   /* ================= rendering ================= */
+  function rowHTML(r, isAdmin, opts) {
+    opts = opts || {};
+    const cx = r.status === 'Cancelled';
+    const when = opts.showDate ? (r.date || '').split('-').reverse().slice(0, 2).join('/') + ' ' + (r.time || '').slice(0, 5) : (r.time || fmtTime(r.ts)).slice(0, 5);
+    const pills = `<span class="pill ${esc(r.platform)}">${r.platform === 'Meesho' ? 'MS' : 'FK'}</span>` +
+      (r.waiting ? (online === false ? '<span class="pill wait">Waiting</span>' : '<span class="pill wait">Sending</span>') : '') +
+      (cx ? '<span class="pill cx">Cancelled</span>' : '');
+    const info = `<span class="awb">${esc(r.packet)}</span>${r.courier ? `<span class="by">${esc(r.courier)}</span>` : ''}<span class="by">${esc(r.by)}</span>` +
+      (cx ? `<span class="by" style="color:var(--bad)">${esc(r.cancelReason || 'Cancelled')} · ${esc((r.cancelledAt || '').slice(5).split(' ')[0].split('-').reverse().join('/'))} ${esc((r.cancelledAt || '').slice(11))} · ${esc(r.cancelledBy || '')}</span>` : '');
+    const acts = [];
+    if (!r.waiting && opts.cancelBtn && !cx) acts.push(`<button class="del" data-cx="${esc(r.awb)}">Cancel</button>`);
+    if (!r.waiting && cx && isAdmin && opts.undoBtn !== false) acts.push(`<button class="del" data-undo="${esc(r.awb)}">Undo</button>`);
+    if (!r.waiting && isAdmin && opts.delBtn !== false) acts.push(`<button class="del" data-del="${esc(r.awb)}">Delete</button>`);
+    return `<tr class="${cx ? 'cancelled' : ''}"><td class="mono">${esc(when)}</td><td>${pills}<div class="awb">${esc(r.awb)}</div></td><td>${info}</td><td class="n"><div class="acts">${acts.join('')}</div></td></tr>`;
+  }
+
   function tally(list) {
     let fk = 0, ms = 0; const by = {};
     list.forEach(r => {
@@ -642,7 +675,7 @@
     const isAdmin = user && user.role === 'admin';
     // mini counter on Scan screen (always today)
     const tw = queue.filter(q => q.date === today());
-    const t = tally(tw.concat(todayRows));
+    const t = tally(tw.concat(todayRows).filter(r => r.status !== 'Cancelled'));
     setText($('mAll'), t.fk + t.ms); setText($('mFk'), t.fk); setText($('mMs'), t.ms);
     $('mQ').hidden = !queue.length || online !== false; setText($('mQ'), queue.length + ' waiting to upload');
 
@@ -650,12 +683,14 @@
     const day = viewDay, isToday = day === today();
     const waiting = queue.filter(q => q.date === day).map(q => Object.assign({ waiting: true }, q));
     const all = waiting.concat(isToday ? todayRows : viewRows).sort((a, b) => (b.ts || 0) - (a.ts || 0));
-    const v = tally(all);
+    const live = all.filter(r => r.status !== 'Cancelled'), nCan = all.length - live.length;
+    const v = tally(live);
+    $('tCan').hidden = !nCan; setText($('tCan'), nCan + ' parcel' + (nCan === 1 ? '' : 's') + ' cancelled at pickup (not counted above)');
     setText($('dayTitle'), isToday ? 'Today' : day);
     setText($('tAll'), v.fk + v.ms); setText($('tFk'), v.fk); setText($('tMs'), v.ms);
     const names = Object.keys(v.by).sort((a, b) => (v.by[b].f + v.by[b].m) - (v.by[a].f + v.by[a].m));
     const bc = {};
-    all.forEach(r => { const k = (r.platform === 'Meesho' ? 'Meesho' : 'Flipkart') + (r.courier ? ' · ' + r.courier : ''); bc[k] = (bc[k] || 0) + 1; });
+    live.forEach(r => { const k = (r.platform === 'Meesho' ? 'Meesho' : 'Flipkart') + (r.courier ? ' · ' + r.courier : ''); bc[k] = (bc[k] || 0) + 1; });
     const cks = Object.keys(bc).sort();
     setHTML($('byCourier'), cks.length ? cks.map(k => `<tr><td>${esc(k)}</td><td class="n"><b>${bc[k]}</b></td></tr>`).join('')
       : '<tr><td colspan="2" class="empty">No parcels yet.</td></tr>');
@@ -664,13 +699,7 @@
       ? names.map(n => `<tr><td>${esc(n)}</td><td class="n">${v.by[n].f}</td><td class="n">${v.by[n].m}</td><td class="n"><b>${v.by[n].f + v.by[n].m}</b></td></tr>`).join('')
       : `<tr><td colspan="4" class="empty">No packets${isToday ? ' yet today' : ' on this day'}.</td></tr>`);
     setText($('logCount'), all.length + ' packet' + (all.length === 1 ? '' : 's'));
-    setHTML($('log'), all.length ? all.map(r => {
-      const nm = products[r.packet] || r.product;
-      return `<tr><td class="mono">${esc((r.time || fmtTime(r.ts)).slice(0, 5))}</td>
-        <td><span class="pill ${esc(r.platform)}">${r.platform === 'Meesho' ? 'MS' : 'FK'}</span>${r.waiting ? (online === false ? '<span class="pill wait">Waiting</span>' : '<span class="pill wait">Sending</span>') : ''}${r.check === 'OK' ? '<span class="pill ok">✓ Order</span>' : r.check === 'NO ORDER' ? '<span class="pill wait">No order</span>' : r.check === 'NO CODE' ? '<span class="pill wait">Not checked</span>' : ''}<div class="awb">${esc(r.awb)}</div></td>
-        <td>${!PORTALS ? `<span class="awb">${esc(r.packet)}</span>${r.courier ? `<span class="by">${esc(r.courier)}</span>` : ''}` : nm ? esc(nm) : `<span class="unk">${esc(r.packet)}</span>${isAdmin ? ` <button class="linkbtn" data-name="${esc(r.packet)}">Name</button>` : ''}`}<span class="by">${esc(r.by)}</span></td>
-        <td class="n">${!r.waiting && isAdmin ? `<button class="del" data-del="${esc(r.awb)}">Delete</button>` : ''}</td></tr>`;
-    }).join('') : `<tr><td colspan="4" class="empty">Nothing scanned${isToday ? ' yet today. Go to Scan and scan the first AWB.' : ' on this day.'}</td></tr>`);
+    setHTML($('log'), all.length ? all.map(r => rowHTML(r, isAdmin)).join('') : `<tr><td colspan="4" class="empty">Nothing scanned${isToday ? ' yet today. Go to Scan and scan the first AWB.' : ' on this day.'}</td></tr>`);
 
     const pk = Object.keys(products).sort((a, b) => products[a].localeCompare(products[b]));
     setHTML($('prods'), pk.length
@@ -690,8 +719,12 @@
       b.disabled = true;
       try {
         if (d) {
-          await api('POST', { action: 'delete', awb: d.dataset.del });
+          const j = await api('POST', { action: 'delete', awb: d.dataset.del });
+          const gone = [todayRows, viewRows, searchRows].flat().find(r => r.awb === d.dataset.del);
+          applyEvent(j.event || { type: 'deleted', awb: d.dataset.del, packet: gone ? gone.packet : '' }); store.set('used', used);
           todayRows = todayRows.filter(r => r.awb !== d.dataset.del); viewRows = viewRows.filter(r => r.awb !== d.dataset.del);
+          searchRows = searchRows.filter(r => r.awb !== d.dataset.del); renderSearch();
+          flash('ok', 'Deleted ' + d.dataset.del, 'This AWB and its packet barcode can be scanned again.');
         } else {
           await api('POST', { action: 'deleteProduct', code: pd.dataset.pdel });
           delete products[pd.dataset.pdel]; delete skus[pd.dataset.pdel]; store.set('products', products); store.set('skus', skus);
@@ -726,10 +759,11 @@
   async function loadUsed() {
     if (usedLoading || !token) return; usedLoading = true;
     try {
-      const j = await api('GET', { action: 'used', since: used.ts || 0 });
-      if (j.full) { used.a = {}; used.p = {}; queue.forEach(r => { used.a[r.awb] = r.date; used.p[r.packet] = r.date; }); }
-      Object.assign(used.a, j.awbs || {}); Object.assign(used.p, j.packets || {});
-      used.ts = j.latest || used.ts; store.set('used', used);
+      const j = await api('GET', { action: 'used', since: used.ts || 0, esince: used.ets || 0 });
+      if (j.full) { used.a = {}; used.p = {}; used.c = {}; queue.forEach(r => { used.a[r.awb] = r.date; used.p[r.packet] = r.date; }); }
+      Object.assign(used.a, j.awbs || {}); Object.assign(used.p, j.packets || {}); Object.assign(used.c, j.cancelled || {});
+      (j.events || []).sort((x, y) => x.t - y.t).forEach(applyEvent);
+      used.ts = j.latest || used.ts; used.ets = j.elatest || used.ets; store.set('used', used);
     } catch (err) {} finally { usedLoading = false; }
   }
 
@@ -774,7 +808,7 @@
         queue.shift(); store.set('queue', queue);
         if (j.dup) {
           const e = j.existing || {};
-          const what = j.kind === 'packet' ? 'Packet ' + rec.packet + ' already used' : j.kind === 'packet-as-awb' ? 'Packet ' + rec.packet + ' is an old AWB' : j.kind === 'awb-as-packet' ? 'AWB ' + rec.awb + ' is an old packet code' : 'AWB ' + rec.awb + ' already scanned';
+          const what = j.kind === 'awb' && e.status === 'Cancelled' ? 'AWB ' + rec.awb + ' was cancelled earlier' : j.kind === 'packet' ? 'Packet ' + rec.packet + ' already used' : j.kind === 'packet-as-awb' ? 'Packet ' + rec.packet + ' is an old AWB' : j.kind === 'awb-as-packet' ? 'AWB ' + rec.awb + ' is an old packet code' : 'AWB ' + rec.awb + ' already scanned';
           flash('bad', '✗ ' + what + ' – not saved', 'Found in the Sheet: ' + (e.date || '') + ' ' + (e.time || '') + ' · ' + (e.by || '') + '. Check this parcel.');
           beep(false); pulse(false);
         } else {
@@ -817,7 +851,8 @@
       const nameOf = r => products[r.packet] || r.product || '';
       const s1 = list.map((r, i) => PORTALS
         ? ({ 'S.No': i + 1, 'Date': r.date, 'Time': r.time, 'Platform': r.platform, 'AWB Number': r.awb, 'Packet Barcode': r.packet, 'Product': nameOf(r), 'Scanned By': r.by, 'Order ID': r.orderId || '', 'Order SKU': r.orderSku || '', 'Check': r.check || '', 'Delivery Partner': r.courier || '' })
-        : ({ 'S.No': i + 1, 'Date': r.date, 'Time': r.time, 'Platform': r.platform, 'Delivery Partner': r.courier || '', 'AWB Number': r.awb, 'Packet Barcode': r.packet, 'Scanned By': r.by }));
+        : ({ 'S.No': i + 1, 'Date': r.date, 'Time': r.time, 'Platform': r.platform, 'Delivery Partner': r.courier || '', 'AWB Number': r.awb, 'Packet Barcode': r.packet, 'Scanned By': r.by,
+             'Status': r.status === 'Cancelled' ? 'Cancelled' : 'Dispatched', 'Cancelled At': r.cancelledAt || '', 'Cancelled By': r.cancelledBy || '', 'Cancel Reason': r.cancelReason || '' }));
       const agg = {};
       list.forEach(r => { const k = [r.date, r.platform, nameOf(r) || ('Unnamed ' + r.packet)].join('|'); agg[k] = (agg[k] || 0) + 1; });
       const s2 = Object.keys(agg).sort().map(k => { const [d, p, n] = k.split('|'); return { 'Date': d, 'Platform': p, 'Product': n, 'Packets': agg[k] }; });
@@ -825,20 +860,148 @@
       const wb = XLSX.utils.book_new();
       const w1 = XLSX.utils.json_to_sheet(s1);
       w1['!cols'] = PORTALS ? [{ wch: 6 }, { wch: 11 }, { wch: 10 }, { wch: 10 }, { wch: 22 }, { wch: 20 }, { wch: 26 }, { wch: 16 }, { wch: 22 }, { wch: 18 }, { wch: 11 }, { wch: 16 }]
-        : [{ wch: 6 }, { wch: 11 }, { wch: 10 }, { wch: 10 }, { wch: 16 }, { wch: 24 }, { wch: 24 }, { wch: 16 }];
+        : [{ wch: 6 }, { wch: 11 }, { wch: 10 }, { wch: 10 }, { wch: 16 }, { wch: 24 }, { wch: 24 }, { wch: 16 }, { wch: 11 }, { wch: 17 }, { wch: 14 }, { wch: 22 }];
       XLSX.utils.book_append_sheet(wb, w1, 'Dispatch');
       if (PORTALS) { const w2 = XLSX.utils.json_to_sheet(s2); w2['!cols'] = [{ wch: 11 }, { wch: 10 }, { wch: 28 }, { wch: 9 }]; XLSX.utils.book_append_sheet(wb, w2, 'Summary'); }
-      const cagg = {}; list.forEach(r => { const k = [r.date, r.platform, r.courier || '—'].join('|'); cagg[k] = (cagg[k] || 0) + 1; });
+      const cagg = {}; list.filter(r => r.status !== 'Cancelled').forEach(r => { const k = [r.date, r.platform, r.courier || '—'].join('|'); cagg[k] = (cagg[k] || 0) + 1; });
       const s3 = Object.keys(cagg).sort().map(k => { const [d, p, c] = k.split('|'); return { 'Date': d, 'Platform': p, 'Delivery Partner': c, 'Parcels': cagg[k] }; });
-      s3.push({ 'Date': 'TOTAL', 'Platform': '', 'Delivery Partner': '', 'Parcels': list.length });
+      const nLive = list.filter(r => r.status !== 'Cancelled').length;
+      s3.push({ 'Date': 'TOTAL', 'Platform': '', 'Delivery Partner': '', 'Parcels': nLive });
+      const cxl = list.filter(r => r.status === 'Cancelled');
+      if (cxl.length) s3.push({ 'Date': 'Cancelled (not counted)', 'Platform': '', 'Delivery Partner': '', 'Parcels': cxl.length });
       const w3 = XLSX.utils.json_to_sheet(s3); w3['!cols'] = [{ wch: 11 }, { wch: 10 }, { wch: 18 }, { wch: 9 }];
       XLSX.utils.book_append_sheet(wb, w3, PORTALS ? 'By Delivery Partner' : 'Summary');
+      if (cxl.length) {
+        const w4 = XLSX.utils.json_to_sheet(cxl.map((r, i) => ({ 'S.No': i + 1, 'Scanned On': r.date, 'Platform': r.platform, 'Delivery Partner': r.courier || '', 'AWB Number': r.awb, 'Packet Barcode': r.packet, 'Cancelled At': r.cancelledAt, 'Cancelled By': r.cancelledBy, 'Reason': r.cancelReason })));
+        w4['!cols'] = [{ wch: 6 }, { wch: 11 }, { wch: 10 }, { wch: 16 }, { wch: 24 }, { wch: 24 }, { wch: 17 }, { wch: 14 }, { wch: 22 }];
+        XLSX.utils.book_append_sheet(wb, w4, 'Cancelled');
+      }
       const fn = 'Dispatch_' + from + (from === to ? '' : '_to_' + to) + '.xlsx';
       XLSX.writeFile(wb, fn);
-      m.className = 'msg ok'; m.textContent = 'Downloaded ' + fn + ' (' + list.length + ' dispatches).';
+      m.className = 'msg ok'; m.textContent = 'Downloaded ' + fn + ' (' + nLive + ' dispatched' + (cxl.length ? ', ' + cxl.length + ' cancelled' : '') + ').';
     } catch (err) { m.className = 'msg bad'; m.textContent = 'Export failed: ' + err.message; }
     finally { $('exportBtn').disabled = false; }
   };
+
+  /* ================= camera box moves between Scan and Cancel ================= */
+  const stageHome = { parent: $('stage').parentNode, next: $('stage').nextSibling };
+  function placeStage(view) {
+    const st = $('stage');
+    if (view === 'cancel' && st.parentNode !== $('cancelSlot')) { closePick(); $('cancelSlot').appendChild(st); }
+    else if (view === 'scan' && st.parentNode !== stageHome.parent) stageHome.parent.insertBefore(st, stageHome.next);
+  }
+
+  /* ================= cancelled at pickup ================= */
+  const REASONS = ['Order cancelled', 'Courier did not pick up', 'Damaged', 'Other'];
+  let reason = store.get('cancelReason', REASONS[0]);
+  function renderReasons() {
+    if (!REASONS.includes(reason)) reason = REASONS[0];
+    setHTML($('reasonChips'), REASONS.map(r => `<button type="button" data-reason="${esc(r)}" aria-pressed="${r === reason}">${esc(r)}</button>`).join(''));
+  }
+  $('reasonChips').onclick = e => {
+    const b = e.target.closest('[data-reason]'); if (!b) return;
+    reason = b.dataset.reason; store.set('cancelReason', reason);
+    $('reasonChips').querySelectorAll('button').forEach(x => x.setAttribute('aria-pressed', String(x === b)));
+  };
+  function cflash(kind, title, sub) { const f = $('cflash'); f.className = 'flash ' + kind; f.innerHTML = '<b>' + esc(title) + '</b><span>' + esc(sub || '') + '</span>'; }
+  let cancelledRows = [];
+  function updateRow(row) {
+    [todayRows, viewRows, searchRows, cancelledRows].forEach(list => { const i = list.findIndex(r => r.awb === row.awb); if (i >= 0) list[i] = Object.assign({}, list[i], row); });
+  }
+  async function cancelCode(code, why) {
+    if (busy) return;
+    busy = true;
+    try {
+      // a packet barcode scanned by mistake: find its AWB if we know it
+      const viaPkt = [todayRows, viewRows].flat().find(r => r.packet === code && r.status !== 'Cancelled');
+      const awb = usedAwbDay(code) ? code : viaPkt ? viaPkt.awb : code;
+      if (queue.some(r => r.awb === awb)) { cflash('warn', 'Still uploading ' + awb, 'Wait a few seconds, then scan again.'); beep(false); syncQueue(); return; }
+      if (used.c[awb]) { cflash('warn', 'AWB ' + awb + ' is already cancelled', 'Cancelled ' + fmtDay(used.c[awb]) + '.'); beep(false); return; }
+      cflash('idle', 'Cancelling ' + awb + '…', why || reason);
+      let j;
+      try { j = await api('POST', { action: 'cancel', awb, reason: why || reason }); }
+      catch (err) {
+        if (err.server) { cflash('bad', '✗ ' + err.message, used.p[code] && !viaPkt ? 'That looks like a packet barcode. Scan the AWB.' : 'Check the AWB and try again.'); }
+        else cflash('bad', '✗ No internet. Not cancelled.', 'Connect and scan the AWB again.');
+        beep(false); pulse(false); return;
+      }
+      applyEvent(j.event); store.set('used', used);
+      updateRow(j.row);
+      if (!cancelledRows.some(r => r.awb === j.row.awb)) cancelledRows.unshift(j.row);
+      cflash('ok', '✓ Cancelled · ' + awb, (j.row.platform || '') + (j.row.courier ? ' · ' + j.row.courier : '') + ' · ' + (why || reason) + '. Packet ' + j.row.packet + ' can be used again.');
+      beep(true); pulse(true);
+      render(); renderCancelled(); renderSearch();
+    } finally { busy = false; }
+  }
+  $('cManualForm').addEventListener('submit', e => { e.preventDefault(); const v = $('cManual').value.trim(); $('cManual').value = ''; $('cManual').blur(); if (v) cancelCode(v); });
+  async function loadCancelled() {
+    try { const j = await api('GET', { action: 'cancelled', date: today() }); cancelledRows = (j.rows || []).sort((x, y) => (y.cancelledAt > x.cancelledAt ? 1 : -1)); }
+    catch (err) {}
+    renderCancelled();
+  }
+  function renderCancelled() {
+    const isAdmin = user && user.role === 'admin';
+    setText($('cCount'), cancelledRows.length + ' parcel' + (cancelledRows.length === 1 ? '' : 's'));
+    setHTML($('cList'), cancelledRows.length ? cancelledRows.map(r => rowHTML(r, isAdmin, { showDate: true, delBtn: false })).join('')
+      : '<tr><td class="empty">No parcels cancelled today.</td></tr>');
+  }
+  async function undoCancel(awb) {
+    try {
+      const j = await api('POST', { action: 'uncancel', awb });
+      applyEvent(j.event); store.set('used', used);
+      updateRow(j.row);
+      cancelledRows = cancelledRows.filter(r => r.awb !== awb);
+      const msg = ['✓ Cancel undone · ' + awb, 'The parcel counts as dispatched again.'];
+      current === 'cancel' ? cflash('ok', ...msg) : flash('ok', ...msg);
+      render(); renderCancelled(); renderSearch();
+    } catch (err) { current === 'cancel' ? cflash('bad', '✗ ' + err.message) : flash('bad', '✗ Could not undo', err.message); }
+  }
+
+  /* ================= search ================= */
+  let searchRows = [], searchTimer = 0, searchSeq = 0;
+  async function runSearch() {
+    const q = $('q').value.trim();
+    $('qClear').hidden = !q;
+    $('searchBox').hidden = q.length < 1; $('dayBox').hidden = q.length >= 1;
+    if (q.length < 3) { searchRows = []; setText($('sCount'), q ? 'Type at least 3 characters' : ''); setHTML($('sList'), ''); return; }
+    const seq = ++searchSeq;
+    setText($('sCount'), 'Searching…');
+    const Q = q.toUpperCase();
+    const local = queue.filter(r => r.awb.toUpperCase().includes(Q) || r.packet.toUpperCase().includes(Q)).map(r => Object.assign({ waiting: true }, r));
+    try {
+      const j = await api('GET', { action: 'search', q });
+      if (seq !== searchSeq) return;
+      searchRows = local.concat(j.rows || []);
+    } catch (err) {
+      if (seq !== searchSeq) return;
+      searchRows = local; setText($('sCount'), err.server ? err.message : 'No internet – showing this phone only');
+    }
+    renderSearch();
+  }
+  function renderSearch() {
+    if ($('searchBox').hidden) return;
+    const isAdmin = user && user.role === 'admin';
+    if ($('sCount').textContent === 'Searching…' || /^\d+ found/.test($('sCount').textContent) || !$('sCount').textContent) setText($('sCount'), searchRows.length + ' found' + (searchRows.length >= 50 ? ' (first 50)' : ''));
+    setHTML($('sList'), searchRows.length ? searchRows.map(r => rowHTML(r, isAdmin, { showDate: true, cancelBtn: true })).join('')
+      : '<tr><td class="empty">No AWB or packet barcode matches.</td></tr>');
+  }
+  $('q').addEventListener('input', () => { clearTimeout(searchTimer); searchTimer = setTimeout(runSearch, 350); });
+  $('searchForm').addEventListener('submit', e => { e.preventDefault(); clearTimeout(searchTimer); runSearch(); $('q').blur(); });
+  $('qClear').onclick = () => { $('q').value = ''; runSearch(); };
+
+  // Cancel / Undo buttons in lists
+  document.addEventListener('click', e => {
+    const c = e.target.closest('[data-cx]'), u = e.target.closest('[data-undo]');
+    const b = c || u; if (!b) return;
+    if (!b.classList.contains('arm')) {
+      b.classList.add('arm'); b.textContent = 'Sure?';
+      setTimeout(() => { if (b.isConnected) { b.classList.remove('arm'); b.textContent = c ? 'Cancel' : 'Undo'; } }, 3000);
+      return;
+    }
+    b.disabled = true;
+    if (c) cancelCode(c.dataset.cx).finally(() => { setText($('sCount'), $('cflash').querySelector('b').textContent); });
+    else undoCancel(u.dataset.undo).finally(() => { if (current === 'today') setText($('sCount'), 'Cancel undone · ' + u.dataset.undo); });
+  });
 
   /* ================= signed manifest ================= */
   let mfFiles = [];
@@ -850,7 +1013,7 @@
   }
   function mfCount() {
     const p = $('mfPlatform').value, c = $('mfCourier').value;
-    const rows = queue.filter(r => r.date === today()).concat(todayRows).filter(r => r.platform === p);
+    const rows = queue.filter(r => r.date === today()).concat(todayRows).filter(r => r.platform === p && r.status !== 'Cancelled');
     const n = rows.filter(r => !r.courier || r.courier.toLowerCase().indexOf(c.toLowerCase()) === 0).length;
     $('mfCount').textContent = 'Scanned today for ' + p + ' · ' + c + ': ' + n + ' parcel' + (n === 1 ? '' : 's') + '. Match this with the count on the manifest.';
   }
