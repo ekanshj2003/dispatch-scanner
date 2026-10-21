@@ -1,9 +1,11 @@
-/* Dispatch Scan Register – app logic (v5: Flipkart order check).
+/* Dispatch Scan Register – app logic (v6: never-repeat codes, delivery partner, signed manifests).
    Talks to the Google Sheet script in google-sheet-script/Code.gs. */
 (function () {
   'use strict';
 
   /* ================= basics ================= */
+  // Flipkart / Meesho order connection is switched off for now. Set to true to bring it back.
+  const PORTALS = false;
   const $ = id => document.getElementById(id);
   const today = () => new Date().toLocaleDateString('en-CA');
   const dayOffset = n => { const d = new Date(); d.setDate(d.getDate() - n); return d.toLocaleDateString('en-CA'); };
@@ -29,6 +31,10 @@
   let learned = store.get('learned', { awb: {}, ign: {} });
   let todayRows = [], viewRows = [], viewDay = today();
   let pendingOrder = null;
+  // Every AWB / packet code ever saved (code -> date). Kept on the phone so a repeat is blocked instantly.
+  let used = store.get('used', { a: {}, p: {}, ts: 0 });
+  let cfg2 = store.get('settings', { meeshoCouriers: ['Valmo', 'Delhivery', 'Shadowfax', 'Xpressbees', 'Ecom Express', 'DTDC'], flipkartCouriers: ['Ekart', 'Delhivery', 'Shadowfax', 'Xpressbees'], uniquePacket: true });
+  let courier = store.get('courier', '');
   let step = 1, pendingAwb = '', labelCodes = new Set(), busy = false, online = null;
 
   /* ================= server ================= */
@@ -72,11 +78,13 @@
     $('userName').textContent = user.name;
     $('userRole').textContent = user.role === 'admin' ? 'Admin' : 'Packer';
     const isAdmin = user.role === 'admin';
-    $('codesTab').hidden = !isAdmin;
-    document.querySelector('.tabs').classList.toggle('three', !isAdmin);
+    $('codesTab').hidden = !(PORTALS && isAdmin);
+    document.querySelector('.tabs').classList.toggle('three', !(PORTALS && isAdmin));
+    $('syncLine').hidden = !PORTALS; if (!PORTALS) $('syncBtn').hidden = true;
     go('scan');
     buildOrders(store.get('orders', [])); ordersLoaded = false;
-    loadProducts(); loadOrders(); loadToday().then(syncQueue);
+    renderCouriers(); fillMfCouriers();
+    loadSettings(); loadUsed(); if (PORTALS) { loadProducts(); loadOrders(); } loadToday().then(syncQueue);
     getDetector().catch(() => {});
     maybeAutoStartCam();
   }
@@ -93,7 +101,7 @@
     try {
       const r = await fetch(u + '?action=ping'); const j = await r.json();
       if (!j.ok || j.app !== 'dispatch-scanner') throw new Error('That link is not the dispatch script.');
-      if (!(j.v >= 3)) throw new Error('Paste the new Code.gs and deploy a new version.');
+      if (!(j.v >= 4)) throw new Error('Paste the new Code.gs and deploy a new version.');
       url = u; store.set('url', url);
       $('dMsg').className = 'msg ok'; $('dMsg').textContent = 'Connected. Now log in.';
       $('devDot').className = 'dot on'; $('devState').textContent = 'Device connected to Google Sheet';
@@ -124,7 +132,8 @@
   let current = 'scan';
   function go(view) {
     current = view;
-    ['scan', 'today', 'excel', 'codes'].forEach(v => { $('v-' + v).hidden = v !== view; });
+    ['scan', 'today', 'manifest', 'excel', 'codes'].forEach(v => { $('v-' + v).hidden = v !== view; });
+    if (view === 'manifest') { $('mfPlatform').value = platform; fillMfCouriers(true); loadManifests(); }
     document.querySelectorAll('.tabs button').forEach(b => b.toggleAttribute('aria-current', b.dataset.view === view));
     if (view === 'scan') maybeAutoStartCam(); else stopCam();
     if (view === 'today') { if (viewDay === today()) { viewRows = todayRows; render(); } else loadView(); }
@@ -157,7 +166,23 @@
   function setPlatform(p) {
     platform = p === 'Meesho' ? 'Meesho' : 'Flipkart'; store.set('platform', platform);
     document.querySelectorAll('.seg button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.p === platform)));
+    renderCouriers();
   }
+  function renderCouriers() {
+    const meesho = platform === 'Meesho';
+    $('courierChips').hidden = !meesho; $('courierAuto').hidden = meesho;
+    if (!PORTALS) $('courierAuto').textContent = 'Not needed for Flipkart';
+    if (!meesho) { $('courierRow').classList.remove('need'); return; }
+    const list = cfg2.meeshoCouriers || [];
+    if (courier && !list.includes(courier)) courier = '';
+    setHTML($('courierChips'), list.map(c => `<button type="button" data-courier="${esc(c)}" aria-pressed="${c === courier}">${esc(c)}</button>`).join(''));
+  }
+  $('courierChips').onclick = e => {
+    const b = e.target.closest('[data-courier]'); if (!b) return;
+    courier = b.dataset.courier; store.set('courier', courier);
+    $('courierRow').classList.remove('need');
+    $('courierChips').querySelectorAll('button').forEach(x => x.setAttribute('aria-pressed', String(x === b)));
+  };
   document.querySelectorAll('.seg button').forEach(b => b.onclick = () => setPlatform(b.dataset.p));
   setPlatform(platform);
 
@@ -206,11 +231,18 @@
     if (!syncInfo || !syncInfo.flipkart) { el.textContent = 'Flipkart not connected'; }
     else if (syncInfo.last && !syncInfo.last.ok) { el.textContent = 'Flipkart sync problem: ' + syncInfo.last.error; }
     else { el.textContent = 'Orders loaded: ' + n + (syncInfo.last ? ' · synced ' + syncInfo.last.at.slice(11) : ''); }
-    $('syncBtn').hidden = !(user && user.role === 'admin' && syncInfo && syncInfo.flipkart);
+    $('syncBtn').hidden = !(PORTALS && user && user.role === 'admin' && syncInfo && syncInfo.flipkart);
   }
 
   /* ================= saving a scan ================= */
-  const knownAwb = awb => todayRows.find(r => r.awb === awb) || queue.find(r => r.awb === awb);
+  const fmtDay = d => d === today() ? 'today' : d ? 'on ' + d.split('-').reverse().join('-') : 'before';
+  const usedAwbDay = c => used.a[c] || (queue.find(r => r.awb === c) || {}).date || (todayRows.find(r => r.awb === c) || {}).date || '';
+  const usedPktDay = c => used.p[c] || (queue.find(r => r.packet === c) || {}).date || (todayRows.find(r => r.packet === c) || {}).date || '';
+  const knownAwb = c => !!usedAwbDay(c);
+  function markUsed(rec) {
+    used.a[rec.awb] = rec.date; used.p[rec.packet] = rec.date;
+    store.set('used', used);
+  }
 
   async function accept(code) {
     code = String(code || '').trim();
@@ -218,11 +250,12 @@
     busy = true;
     try {
       if (step === 1) {
-        if (products[code]) { flash('bad', 'That is a packet barcode.', 'Scan the AWB on the shipping label first.'); beep(false); pulse(false); return; }
-        const k = knownAwb(code);
-        if (k) { flash('bad', 'Duplicate AWB ' + code, 'Already dispatched ' + (k.time || '') + ' · ' + k.platform + (k.by ? ' · ' + k.by : '')); beep(false); pulse(false); return; }
+        const aDay = usedAwbDay(code), pDay = usedPktDay(code);
+        if (aDay) { flash('bad', '✗ AWB ' + code + ' already scanned', 'It was dispatched ' + fmtDay(aDay) + '. An AWB can be scanned only once.'); beep(false); pulse(false); return; }
+        if (pDay || products[code]) { flash('bad', '✗ That is a packet barcode', (pDay ? 'Already used ' + fmtDay(pDay) + '. ' : '') + 'Scan the AWB on the shipping label first.'); beep(false); pulse(false); return; }
         const ord = findOrder(code);
         if (ord) setPlatform(ord.p); else if (/^FMP/i.test(code)) setPlatform('Flipkart');
+        if (platform === 'Meesho' && !courier) { flash('warn', 'Pick the delivery partner first', 'Tap Valmo, Delhivery, Shadowfax… at the top, then scan the AWB again.'); $('courierRow').classList.add('need'); beep(false); return; }
         pendingAwb = code; pendingOrder = ord; step = 2;
         labelCodes = new Set(recentCodes()); labelCodes.add(code);
         renderSteps();
@@ -232,6 +265,10 @@
         beep(true); pulse(true);
       } else {
         if (code === pendingAwb) { flash('warn', 'That is the same AWB.', 'Scan the barcode on the packet now.'); beep(false); return; }
+        const aDay2 = usedAwbDay(code);
+        if (aDay2) { flash('bad', '✗ That is an AWB, not a packet', 'AWB ' + code + ' was used ' + fmtDay(aDay2) + '. Scan the barcode on the packet.'); beep(false); pulse(false); return; }
+        const pDay2 = cfg2.uniquePacket ? usedPktDay(code) : '';
+        if (pDay2) { flash('bad', '✗ Packet barcode already used', code + ' was scanned ' + fmtDay(pDay2) + '. Each packet barcode can be used only once.'); beep(false); pulse(false); return; }
         const ord = pendingOrder, pSku = skus[code] || '';
         const want = ord ? ord.items.map(i => i.sku).filter(Boolean) : [];
         if (ord && pSku && want.length && !want.includes(pSku)) {        // wrong product: do not save, stay on this parcel
@@ -242,18 +279,19 @@
         const check = !ord ? (ordersLoaded && syncInfo && syncInfo.flipkart ? 'NO ORDER' : '') : !pSku ? 'NO CODE' : 'OK';
         const ts = Date.now();
         const rec = { awb: pendingAwb, packet: code, platform, ts, date: today(), time: fmtTime(ts), product: products[code] || (ord && ord.items.length === 1 ? itemLabel(ord.items[0]) : ''), by: user ? user.name : '',
-          orderId: ord ? ord.oid : '', orderSku: want.join(', '), check };
+          orderId: ord ? ord.oid : '', orderSku: want.join(', '), check, courier: platform === 'Meesho' ? courier : (ord && ord.c) || '' };
         step = 1; pendingAwb = ''; pendingOrder = null; labelCodes = new Set(); renderSteps();
         // Save on the phone first and upload in the background, so the next parcel can be scanned at once.
-        queue.push(rec); store.set('queue', queue);
+        queue.push(rec); store.set('queue', queue); markUsed(rec);
         if (check === 'OK') flash('ok', '✓ Correct · Saved · ' + rec.awb, rec.product || orderLabel(ord));
         else if (check === 'NO CODE') flash('warn', '✓ Saved · ' + rec.awb + ' · not checked', 'Packet ' + code + ' is not linked to a SKU yet.');
+        else if (!PORTALS) flash('ok', '✓ Saved · ' + platform + (rec.courier ? ' · ' + rec.courier : '') + ' · ' + rec.awb, 'Packet ' + code);
         else flash(rec.product ? 'ok' : 'warn', '✓ Saved · ' + platform + ' · ' + rec.awb, rec.product || 'New packet code ' + code + (user && user.role === 'admin' ? '. Name it in Codes.' : '. Ask admin to name it.'));
         beep(true); pulse(true);
         render();
         syncQueue();
         // Admin + one-product order + unknown packet barcode: offer to link it, so next time it is checked.
-        if (check === 'NO CODE' && want.length === 1 && user && user.role === 'admin') offerLink(code, ord.items[0]);
+        if (check === 'NO CODE' && want.length === 1 && user && user.role === 'admin' && !cfg2.uniquePacket) offerLink(code, ord.items[0]);
       }
     } finally { busy = false; }
   }
@@ -616,6 +654,12 @@
     setText($('dayTitle'), isToday ? 'Today' : day);
     setText($('tAll'), v.fk + v.ms); setText($('tFk'), v.fk); setText($('tMs'), v.ms);
     const names = Object.keys(v.by).sort((a, b) => (v.by[b].f + v.by[b].m) - (v.by[a].f + v.by[a].m));
+    const bc = {};
+    all.forEach(r => { const k = (r.platform === 'Meesho' ? 'Meesho' : 'Flipkart') + (r.courier ? ' · ' + r.courier : ''); bc[k] = (bc[k] || 0) + 1; });
+    const cks = Object.keys(bc).sort();
+    setHTML($('byCourier'), cks.length ? cks.map(k => `<tr><td>${esc(k)}</td><td class="n"><b>${bc[k]}</b></td></tr>`).join('')
+      : '<tr><td colspan="2" class="empty">No parcels yet.</td></tr>');
+    $('byProd').closest('.card').hidden = !PORTALS;
     setHTML($('byProd'), names.length
       ? names.map(n => `<tr><td>${esc(n)}</td><td class="n">${v.by[n].f}</td><td class="n">${v.by[n].m}</td><td class="n"><b>${v.by[n].f + v.by[n].m}</b></td></tr>`).join('')
       : `<tr><td colspan="4" class="empty">No packets${isToday ? ' yet today' : ' on this day'}.</td></tr>`);
@@ -624,7 +668,7 @@
       const nm = products[r.packet] || r.product;
       return `<tr><td class="mono">${esc((r.time || fmtTime(r.ts)).slice(0, 5))}</td>
         <td><span class="pill ${esc(r.platform)}">${r.platform === 'Meesho' ? 'MS' : 'FK'}</span>${r.waiting ? (online === false ? '<span class="pill wait">Waiting</span>' : '<span class="pill wait">Sending</span>') : ''}${r.check === 'OK' ? '<span class="pill ok">✓ Order</span>' : r.check === 'NO ORDER' ? '<span class="pill wait">No order</span>' : r.check === 'NO CODE' ? '<span class="pill wait">Not checked</span>' : ''}<div class="awb">${esc(r.awb)}</div></td>
-        <td>${nm ? esc(nm) : `<span class="unk">${esc(r.packet)}</span>${isAdmin ? ` <button class="linkbtn" data-name="${esc(r.packet)}">Name</button>` : ''}`}<span class="by">${esc(r.by)}</span></td>
+        <td>${!PORTALS ? `<span class="awb">${esc(r.packet)}</span>${r.courier ? `<span class="by">${esc(r.courier)}</span>` : ''}` : nm ? esc(nm) : `<span class="unk">${esc(r.packet)}</span>${isAdmin ? ` <button class="linkbtn" data-name="${esc(r.packet)}">Name</button>` : ''}`}<span class="by">${esc(r.by)}</span></td>
         <td class="n">${!r.waiting && isAdmin ? `<button class="del" data-del="${esc(r.awb)}">Delete</button>` : ''}</td></tr>`;
     }).join('') : `<tr><td colspan="4" class="empty">Nothing scanned${isToday ? ' yet today. Go to Scan and scan the first AWB.' : ' on this day.'}</td></tr>`);
 
@@ -675,6 +719,20 @@
   });
 
   /* ================= loading + sync ================= */
+  async function loadSettings() {
+    try { const j = await api('GET', { action: 'settings' }); if (j.settings) { cfg2 = j.settings; store.set('settings', cfg2); renderCouriers(); fillMfCouriers(); } } catch (err) {}
+  }
+  let usedLoading = false;
+  async function loadUsed() {
+    if (usedLoading || !token) return; usedLoading = true;
+    try {
+      const j = await api('GET', { action: 'used', since: used.ts || 0 });
+      if (j.full) { used.a = {}; used.p = {}; queue.forEach(r => { used.a[r.awb] = r.date; used.p[r.packet] = r.date; }); }
+      Object.assign(used.a, j.awbs || {}); Object.assign(used.p, j.packets || {});
+      used.ts = j.latest || used.ts; store.set('used', used);
+    } catch (err) {} finally { usedLoading = false; }
+  }
+
   async function loadToday() {
     if (!token) return;
     try {
@@ -716,7 +774,8 @@
         queue.shift(); store.set('queue', queue);
         if (j.dup) {
           const e = j.existing || {};
-          flash('bad', 'Duplicate AWB ' + rec.awb + ', not saved', 'Already in the Sheet: ' + (e.date || '') + ' ' + (e.time || '') + ' · ' + (e.by || ''));
+          const what = j.kind === 'packet' ? 'Packet ' + rec.packet + ' already used' : j.kind === 'packet-as-awb' ? 'Packet ' + rec.packet + ' is an old AWB' : j.kind === 'awb-as-packet' ? 'AWB ' + rec.awb + ' is an old packet code' : 'AWB ' + rec.awb + ' already scanned';
+          flash('bad', '✗ ' + what + ' – not saved', 'Found in the Sheet: ' + (e.date || '') + ' ' + (e.time || '') + ' · ' + (e.by || '') + '. Check this parcel.');
           beep(false); pulse(false);
         } else {
           todayRows = todayRows.filter(r => r.awb !== rec.awb);
@@ -728,8 +787,8 @@
     } finally { syncing = false; render(); }
   }
   window.addEventListener('online', syncQueue);
-  setInterval(() => { if (!document.hidden && token && !$('app').hidden) { syncQueue(); if (!busy) loadToday(); } }, 25000);
-  setInterval(() => { if (!document.hidden && token && !$('app').hidden) loadOrders(); }, 120000);
+  setInterval(() => { if (!document.hidden && token && !$('app').hidden) { syncQueue(); loadUsed(); if (!busy) loadToday(); } }, 25000);
+  setInterval(() => { if (PORTALS && !document.hidden && token && !$('app').hidden) loadOrders(); }, 120000);
   $('syncBtn').onclick = async e => {
     e.stopPropagation(); const b = $('syncBtn'); b.disabled = true; $('syncLine').textContent = 'Syncing with Flipkart…';
     try { const j = await api('POST', { action: 'syncNow' }); if (j.orders) buildOrders(j.orders); syncInfo = j.sync || syncInfo; store.set('orders', j.orders || []); renderSync(); }
@@ -756,21 +815,105 @@
       const list = (j.rows || []).sort((a, b) => (a.ts || 0) - (b.ts || 0));
       if (!list.length) { m.textContent = 'No dispatches between ' + from + ' and ' + to + '.'; return; }
       const nameOf = r => products[r.packet] || r.product || '';
-      const s1 = list.map((r, i) => ({ 'S.No': i + 1, 'Date': r.date, 'Time': r.time, 'Platform': r.platform, 'AWB Number': r.awb, 'Packet Barcode': r.packet, 'Product': nameOf(r), 'Scanned By': r.by, 'Order ID': r.orderId || '', 'Order SKU': r.orderSku || '', 'Check': r.check || '' }));
+      const s1 = list.map((r, i) => PORTALS
+        ? ({ 'S.No': i + 1, 'Date': r.date, 'Time': r.time, 'Platform': r.platform, 'AWB Number': r.awb, 'Packet Barcode': r.packet, 'Product': nameOf(r), 'Scanned By': r.by, 'Order ID': r.orderId || '', 'Order SKU': r.orderSku || '', 'Check': r.check || '', 'Delivery Partner': r.courier || '' })
+        : ({ 'S.No': i + 1, 'Date': r.date, 'Time': r.time, 'Platform': r.platform, 'Delivery Partner': r.courier || '', 'AWB Number': r.awb, 'Packet Barcode': r.packet, 'Scanned By': r.by }));
       const agg = {};
       list.forEach(r => { const k = [r.date, r.platform, nameOf(r) || ('Unnamed ' + r.packet)].join('|'); agg[k] = (agg[k] || 0) + 1; });
       const s2 = Object.keys(agg).sort().map(k => { const [d, p, n] = k.split('|'); return { 'Date': d, 'Platform': p, 'Product': n, 'Packets': agg[k] }; });
       s2.push({ 'Date': 'TOTAL', 'Platform': '', 'Product': '', 'Packets': list.length });
       const wb = XLSX.utils.book_new();
-      const w1 = XLSX.utils.json_to_sheet(s1); w1['!cols'] = [{ wch: 6 }, { wch: 11 }, { wch: 10 }, { wch: 10 }, { wch: 22 }, { wch: 20 }, { wch: 26 }, { wch: 16 }, { wch: 22 }, { wch: 18 }, { wch: 11 }];
-      const w2 = XLSX.utils.json_to_sheet(s2); w2['!cols'] = [{ wch: 11 }, { wch: 10 }, { wch: 28 }, { wch: 9 }];
-      XLSX.utils.book_append_sheet(wb, w1, 'Dispatch'); XLSX.utils.book_append_sheet(wb, w2, 'Summary');
+      const w1 = XLSX.utils.json_to_sheet(s1);
+      w1['!cols'] = PORTALS ? [{ wch: 6 }, { wch: 11 }, { wch: 10 }, { wch: 10 }, { wch: 22 }, { wch: 20 }, { wch: 26 }, { wch: 16 }, { wch: 22 }, { wch: 18 }, { wch: 11 }, { wch: 16 }]
+        : [{ wch: 6 }, { wch: 11 }, { wch: 10 }, { wch: 10 }, { wch: 16 }, { wch: 24 }, { wch: 24 }, { wch: 16 }];
+      XLSX.utils.book_append_sheet(wb, w1, 'Dispatch');
+      if (PORTALS) { const w2 = XLSX.utils.json_to_sheet(s2); w2['!cols'] = [{ wch: 11 }, { wch: 10 }, { wch: 28 }, { wch: 9 }]; XLSX.utils.book_append_sheet(wb, w2, 'Summary'); }
+      const cagg = {}; list.forEach(r => { const k = [r.date, r.platform, r.courier || '—'].join('|'); cagg[k] = (cagg[k] || 0) + 1; });
+      const s3 = Object.keys(cagg).sort().map(k => { const [d, p, c] = k.split('|'); return { 'Date': d, 'Platform': p, 'Delivery Partner': c, 'Parcels': cagg[k] }; });
+      s3.push({ 'Date': 'TOTAL', 'Platform': '', 'Delivery Partner': '', 'Parcels': list.length });
+      const w3 = XLSX.utils.json_to_sheet(s3); w3['!cols'] = [{ wch: 11 }, { wch: 10 }, { wch: 18 }, { wch: 9 }];
+      XLSX.utils.book_append_sheet(wb, w3, PORTALS ? 'By Delivery Partner' : 'Summary');
       const fn = 'Dispatch_' + from + (from === to ? '' : '_to_' + to) + '.xlsx';
       XLSX.writeFile(wb, fn);
       m.className = 'msg ok'; m.textContent = 'Downloaded ' + fn + ' (' + list.length + ' dispatches).';
     } catch (err) { m.className = 'msg bad'; m.textContent = 'Export failed: ' + err.message; }
     finally { $('exportBtn').disabled = false; }
   };
+
+  /* ================= signed manifest ================= */
+  let mfFiles = [];
+  function fillMfCouriers(preferScan) {
+    const p = $('mfPlatform').value, list = (p === 'Meesho' ? cfg2.meeshoCouriers : cfg2.flipkartCouriers) || [];
+    const keep = (preferScan === true && p === 'Meesho' && courier) ? courier : ($('mfCourier').value || (p === 'Meesho' ? courier : ''));
+    $('mfCourier').innerHTML = list.map(c => `<option${c === keep ? ' selected' : ''}>${esc(c)}</option>`).join('') + '<option value="Other">Other</option>';
+    mfCount();
+  }
+  function mfCount() {
+    const p = $('mfPlatform').value, c = $('mfCourier').value;
+    const rows = queue.filter(r => r.date === today()).concat(todayRows).filter(r => r.platform === p);
+    const n = rows.filter(r => !r.courier || r.courier.toLowerCase().indexOf(c.toLowerCase()) === 0).length;
+    $('mfCount').textContent = 'Scanned today for ' + p + ' · ' + c + ': ' + n + ' parcel' + (n === 1 ? '' : 's') + '. Match this with the count on the manifest.';
+  }
+  $('mfPlatform').onchange = () => fillMfCouriers(true);
+  $('mfCourier').onchange = mfCount;
+  $('mfFiles').onchange = e => {
+    mfFiles = mfFiles.concat([...e.target.files]).slice(0, 20); e.target.value = '';
+    renderMfList(); $('mfMsg').textContent = '';
+  };
+  function renderMfList(states) {
+    $('mfList').innerHTML = mfFiles.map((f, i) => `<li class="${states && states[i] || ''}"><span>Page ${i + 1} · ${esc(f.name || 'photo')}</span><span>${states && states[i] === 'ok' ? '✓ Saved' : states && states[i] === 'bad' ? 'Failed' : (f.size / 1048576).toFixed(1) + ' MB'}</span></li>`).join('');
+    $('mfBtn').disabled = !mfFiles.length;
+    $('mfBtn').textContent = mfFiles.length ? 'Upload ' + mfFiles.length + ' page' + (mfFiles.length === 1 ? '' : 's') + ' to Drive' : 'Upload to Drive';
+  }
+  // Phone photos are 3–8 MB. Shrink to about 2000 px, which keeps signatures readable and uploads fast.
+  async function prepFile(f) {
+    if (f.type === 'application/pdf') return { type: 'application/pdf', blob: f };
+    try {
+      const bmp = await createImageBitmap(f);
+      const k = Math.min(1, 2000 / Math.max(bmp.width, bmp.height));
+      const cv = document.createElement('canvas'); cv.width = Math.round(bmp.width * k); cv.height = Math.round(bmp.height * k);
+      cv.getContext('2d').drawImage(bmp, 0, 0, cv.width, cv.height);
+      const blob = await new Promise(ok => cv.toBlob(ok, 'image/jpeg', 0.85));
+      if (blob) return { type: 'image/jpeg', blob };
+    } catch (e) {}
+    return { type: /^image\/(jpeg|png|webp|heic|heif)$/.test(f.type) ? f.type : 'image/jpeg', blob: f };
+  }
+  const toB64 = blob => new Promise((ok, no) => { const r = new FileReader(); r.onload = () => ok(String(r.result).split(',')[1] || ''); r.onerror = no; r.readAsDataURL(blob); });
+  $('mfForm').addEventListener('submit', async e => {
+    e.preventDefault();
+    if (!mfFiles.length) return;
+    const btn = $('mfBtn'), msg = $('mfMsg'), states = mfFiles.map(() => '');
+    btn.disabled = true; msg.className = 'msg';
+    let done = 0;
+    for (let i = 0; i < mfFiles.length; i++) {
+      msg.textContent = 'Uploading page ' + (i + 1) + ' of ' + mfFiles.length + '…';
+      try {
+        const f = await prepFile(mfFiles[i]);
+        const data = await toB64(f.blob);
+        await api('POST', { action: 'manifest', platform: $('mfPlatform').value, courier: $('mfCourier').value, page: i + 1, type: f.type, data });
+        states[i] = 'ok'; done++;
+      } catch (err) { states[i] = 'bad'; msg.textContent = 'Page ' + (i + 1) + ' failed: ' + err.message; }
+      renderMfList(states);
+    }
+    if (done === mfFiles.length) {
+      msg.className = 'msg ok'; msg.textContent = '✓ Saved ' + done + ' page' + (done === 1 ? '' : 's') + ' in Google Drive › ' + today();
+      mfFiles = []; setTimeout(() => renderMfList(), 1500);
+    } else {
+      msg.className = 'msg bad'; msg.textContent += ' Tap Upload again to retry the failed pages.';
+      mfFiles = mfFiles.filter((_, i) => states[i] !== 'ok'); setTimeout(() => renderMfList(), 1500);
+    }
+    btn.disabled = !mfFiles.length;
+    loadManifests();
+  });
+  async function loadManifests() {
+    setText($('mfDay'), today().split('-').reverse().join('-'));
+    try {
+      const j = await api('GET', { action: 'manifests', date: today() });
+      const list = (j.manifests || []).sort((a, b) => a.time < b.time ? 1 : -1);
+      setHTML($('mfDone'), list.length ? list.map(m => `<tr><td class="mono">${esc(m.time.slice(0, 5))}</td><td>${esc(m.platform)} · ${esc(m.courier)}<span class="by">Page ${m.page} · ${esc(m.by)} · ${m.parcels} parcels scanned</span></td><td class="n"><a class="linkbtn" href="${esc(m.url)}" target="_blank" rel="noopener">Open</a></td></tr>`).join('')
+        : '<tr><td class="empty">No manifest uploaded today yet.</td></tr>');
+    } catch (err) { setHTML($('mfDone'), `<tr><td class="empty">${esc(err.message)}</td></tr>`); }
+  }
 
   /* ================= start ================= */
   $('day').value = today(); $('from').value = today(); $('to').value = today();

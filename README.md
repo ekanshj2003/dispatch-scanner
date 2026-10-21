@@ -42,30 +42,33 @@ Already deployed the old script? Paste the new code, run **setup** again, then *
 
 Camera tips:
 - Hold the phone 15–25 cm away, label flat, barcode lying across the box.
-- Dark godown? Tap **Light**. Small barcode? Tap **2×**.
+- Flash turns on by itself; tap **Flash** to switch it off. Small barcode? Tap **2×**.
 - On a Bluetooth barcode gun, just scan. No need to tap anything.
 
-## Flipkart order check (optional)
+## Never scan twice
 
-When connected, scanning an AWB shows what should be inside the parcel, and a wrong packet is blocked with a red warning.
+- An **AWB** can be saved only once, ever. Scanning it again shows a red "already scanned" with the date.
+- A **packet barcode** can also be used only once, unless you change it in the Sheet's **Settings** tab: set *Packet barcode used only once* to `NO` if the same barcode is printed on every packet of a product.
+- An AWB can never be used as a packet barcode, and the other way round.
 
-1. Flipkart Seller Hub → **Manage Profile → Developer Access → Self Access → Create New Access**. Keep the API key and secret private.
-2. In Apps Script, click the **gear icon (Project Settings)** on the left → **Script Properties** → **Add script property**:
-   - `FK_APP_ID` = the API key / Application ID
-   - `FK_APP_SECRET` = the secret
-   Click **Save script properties**.
-3. Choose **setup** and click **Run**. Allow the new permission (it now contacts Flipkart). The log at the bottom should say **Flipkart connected**.
-4. **Deploy → Manage deployments → ✏️ → Version: New version → Deploy**.
-5. In the app, open **Codes** and add the **SKU** for each packet barcode (the same SKU as your Flipkart listing). Or just scan: after a parcel, the admin is asked "Is it …?" and one tap links it.
+## Meesho delivery partner
 
-Orders refresh every 15 minutes. An admin can tap their name → **Sync Flipkart now**. The **Orders** tab in the Sheet shows what was pulled.
+When **Meesho** is selected, tap the delivery partner under the top bar (Valmo, Delhivery, Shadowfax…) before scanning. The app remembers it until you change it. Edit the list in the Sheet's **Settings** tab. The **Today** tab shows parcels per delivery partner.
+
+## Signed manifest
+
+Open the **Manifest** tab, pick the platform and delivery partner, tap **Take photo or choose file** (one photo per page, or a PDF) and tap **Upload**. Files are saved in Google Drive › **Dispatch Manifests** › today's date, and listed in the Sheet's **Manifests** tab with the number of parcels scanned for that partner.
+
+## Flipkart / Meesho order connection
+
+Switched off in this version. The code is kept; it can be switched on later (set `PORTALS = true` at the top of app.js).
 
 ## Tabs
 
 - **Scan** – the scanner and today's count.
 - **Today** – totals by product and the full log. Pick any date at the top.
 - **Excel** – choose dates and download. Sheet 1 has every parcel, Sheet 2 has totals.
-- **Codes** (admin only) – name each packet barcode once, e.g. `Baby Pants M 30`.
+- **Manifest** – upload the signed manifest photos; they go to Google Drive in today's folder.
 
 ## Problems
 

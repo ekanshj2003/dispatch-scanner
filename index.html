@@ -54,6 +54,11 @@
       </div>
     </div>
   </header>
+  <div class="courier-row" id="courierRow">
+    <span class="lbl">Delivery partner</span>
+    <div class="chips" id="courierChips" role="group" aria-label="Delivery partner"></div>
+    <span class="muted small" id="courierAuto" hidden>Taken from the Flipkart order</span>
+  </div>
 
   <!-- SCAN -->
   <section class="view" id="v-scan">
@@ -112,13 +117,40 @@
     <div class="card"><div class="scroll"><table>
       <thead><tr><th>Product</th><th class="n">FK</th><th class="n">MS</th><th class="n">Total</th></tr></thead>
       <tbody id="byProd"></tbody></table></div></div>
+    <div class="card"><div class="scroll"><table>
+      <thead><tr><th>Delivery partner</th><th class="n">Parcels</th></tr></thead>
+      <tbody id="byCourier"></tbody></table></div></div>
     <div class="row between"><h2>Dispatch log</h2><span class="muted small" id="logCount"></span></div>
     <div class="card"><div class="scroll"><table class="log">
-      <thead><tr><th>Time</th><th>AWB</th><th>Product · by</th><th></th></tr></thead>
+      <thead><tr><th>Time</th><th>AWB</th><th>Packet · by</th><th></th></tr></thead>
       <tbody id="log"></tbody></table></div></div>
   </section>
 
   <!-- EXCEL -->
+  <section class="view" id="v-manifest" hidden>
+    <h2>Signed manifest</h2>
+    <p class="muted">After the courier signs, take a photo of each page (or pick a PDF). It is saved in Google Drive in today's folder.</p>
+    <form class="card stack" id="mfForm">
+      <div class="row">
+        <label class="field grow"><span class="lbl">Platform</span>
+          <select id="mfPlatform"><option>Flipkart</option><option>Meesho</option></select></label>
+        <label class="field grow"><span class="lbl">Delivery partner</span>
+          <select id="mfCourier"></select></label>
+      </div>
+      <p class="small" id="mfCount"></p>
+      <label class="pickfile" for="mfFiles">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>
+        <span><b>Take photo or choose file</b><span class="small muted">Photos or PDF · one photo per page</span></span>
+      </label>
+      <input type="file" id="mfFiles" accept="image/*,application/pdf" multiple hidden>
+      <ul class="mf-files" id="mfList"></ul>
+      <button class="btn primary big" type="submit" id="mfBtn" disabled>Upload to Drive</button>
+      <p class="msg" id="mfMsg"></p>
+    </form>
+    <div class="row between"><h2>Uploaded today</h2><span class="muted small" id="mfDay"></span></div>
+    <div class="card"><div class="scroll"><table><tbody id="mfDone"></tbody></table></div></div>
+  </section>
+
   <section class="view" id="v-excel" hidden>
     <h2>Download Excel</h2>
     <p class="muted">You get two sheets: every dispatch, and totals by date, platform and product. Your Google Sheet also stays up to date by itself.</p>
@@ -154,6 +186,7 @@
   <nav class="tabs" aria-label="Sections">
     <button type="button" data-view="scan" aria-current="page"><svg viewBox="0 0 24 24"><path d="M3 7V4h3M21 7V4h-3M3 17v3h3M21 17v3h-3M7 8v8M10 8v8M13 8v8M17 8v8"/></svg>Scan</button>
     <button type="button" data-view="today"><svg viewBox="0 0 24 24"><path d="M4 5h16M4 12h16M4 19h10"/></svg>Today</button>
+    <button type="button" data-view="manifest"><svg viewBox="0 0 24 24"><path d="M7 3h7l4 4v14H7zM14 3v4h4M10 13l2 2 4-4"/></svg>Manifest</button>
     <button type="button" data-view="excel"><svg viewBox="0 0 24 24"><path d="M12 4v11m0 0-4-4m4 4 4-4M5 20h14"/></svg>Excel</button>
     <button type="button" data-view="codes" id="codesTab"><svg viewBox="0 0 24 24"><path d="M4 7h10M4 12h16M4 17h7M17 4l3 3-3 3"/></svg>Codes</button>
   </nav>
