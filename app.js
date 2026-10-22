@@ -1,4 +1,4 @@
-/* Dispatch Scan Register – app logic (v8: dispatch again after cancel).
+/* Dispatch Scan Register – app logic (v9: cancel removes the parcel from dispatch).
    Talks to the Google Sheet script in google-sheet-script/Code.gs. */
 (function () {
   'use strict';
@@ -85,7 +85,7 @@
     go('scan');
     buildOrders(store.get('orders', [])); ordersLoaded = false;
     renderCouriers(); fillMfCouriers();
-    loadSettings(); loadUsed(); if (PORTALS) { loadProducts(); loadOrders(); } loadToday().then(syncQueue);
+    loadSettings(); loadUsed(); loadCancelled(); if (PORTALS) { loadProducts(); loadOrders(); } loadToday().then(syncQueue);
     getDetector().catch(() => {});
     maybeAutoStartCam();
   }
@@ -102,7 +102,7 @@
     try {
       const r = await fetch(u + '?action=ping'); const j = await r.json();
       if (!j.ok || j.app !== 'dispatch-scanner') throw new Error('That link is not the dispatch script.');
-      if (!(j.v >= 6)) throw new Error('Paste the new Code.gs and deploy a new version.');
+      if (!(j.v >= 7)) throw new Error('Paste the new Code.gs and deploy a new version.');
       url = u; store.set('url', url);
       $('dMsg').className = 'msg ok'; $('dMsg').textContent = 'Connected. Now log in.';
       $('devDot').className = 'dot on'; $('devState').textContent = 'Device connected to Google Sheet';
@@ -139,6 +139,7 @@
     if (view === 'manifest') { $('mfPlatform').value = platform; fillMfCouriers(true); loadManifests(); }
     document.querySelectorAll('.tabs button').forEach(b => b.toggleAttribute('aria-current', b.dataset.view === view));
     if (view === 'scan' || view === 'cancel') maybeAutoStartCam(); else stopCam();
+    if (view === 'today') loadCancelled();
     if (view === 'today') { if (viewDay === today()) { viewRows = todayRows; render(); } else loadView(); }
     if (view === 'codes') render();
   }
@@ -692,7 +693,7 @@
     const acts = [];
     if (!r.waiting && opts.cancelBtn && !cx) acts.push(`<button class="del" data-cx="${esc(r.awb)}">Cancel</button>`);
     if (!r.waiting && cx && isAdmin && opts.undoBtn !== false) acts.push(`<button class="del" data-undo="${esc(r.awb)}" data-ts="${esc(r.ts)}">Undo</button>`);
-    if (!r.waiting && isAdmin && opts.delBtn !== false) acts.push(`<button class="del" data-del="${esc(r.awb)}" data-ts="${esc(r.ts)}">Delete</button>`);
+    if (!r.waiting && !cx && isAdmin && opts.delBtn !== false) acts.push(`<button class="del" data-del="${esc(r.awb)}" data-ts="${esc(r.ts)}">Delete</button>`);
     return `<tr class="${cx ? 'cancelled' : ''}"><td class="mono">${esc(when)}</td><td>${pills}<div class="awb">${esc(r.awb)}</div></td><td>${info}</td><td class="n"><div class="acts">${acts.join('')}</div></td></tr>`;
   }
 
@@ -719,7 +720,8 @@
     const all = waiting.concat(isToday ? todayRows : viewRows).sort((a, b) => (b.ts || 0) - (a.ts || 0));
     const live = all.filter(r => r.status !== 'Cancelled'), nCan = all.length - live.length;
     const v = tally(live);
-    $('tCan').hidden = !nCan; setText($('tCan'), nCan + ' parcel' + (nCan === 1 ? '' : 's') + ' cancelled at pickup (not counted above)');
+    const nCx = isToday ? cancelledRows.length + nCan : nCan;
+    $('tCan').hidden = !nCx; setText($('tCan'), nCx + ' parcel' + (nCx === 1 ? '' : 's') + ' cancelled today – removed from dispatch (see Cancel tab)');
     setText($('dayTitle'), isToday ? 'Today' : day);
     setText($('tAll'), v.fk + v.ms); setText($('tFk'), v.fk); setText($('tMs'), v.ms);
     const names = Object.keys(v.by).sort((a, b) => (v.by[b].f + v.by[b].m) - (v.by[a].f + v.by[a].m));
@@ -795,7 +797,8 @@
   async function loadUsed() {
     if (usedLoading || !token) return; usedLoading = true;
     try {
-      const j = await api('GET', { action: 'used', since: used.ts || 0, esince: used.ets || 0 });
+      let j = await api('GET', { action: 'used', since: used.ts || 0, esince: used.ets || 0 });
+      if (j.v && used.sv !== j.v) { used.ts = 0; used.ets = 0; used.sv = j.v; j = await api('GET', { action: 'used', since: 0, esince: 0 }); }
       if (j.full) { used.a = {}; used.p = {}; used.c = {}; queue.forEach(r => { used.a[r.awb] = r.date; used.p[r.packet] = r.date; }); }
       Object.assign(used.a, j.awbs || {}); Object.assign(used.p, j.packets || {}); Object.assign(used.c, j.cancelled || {}); Object.assign(used.cr, j.reasons || {});
       (j.live || []).forEach(k => { delete used.c[k]; delete used.cr[k]; });
@@ -904,8 +907,9 @@
       const s3 = Object.keys(cagg).sort().map(k => { const [d, p, c] = k.split('|'); return { 'Date': d, 'Platform': p, 'Delivery Partner': c, 'Parcels': cagg[k] }; });
       const nLive = list.filter(r => r.status !== 'Cancelled').length;
       s3.push({ 'Date': 'TOTAL', 'Platform': '', 'Delivery Partner': '', 'Parcels': nLive });
-      const cxl = list.filter(r => r.status === 'Cancelled');
-      if (cxl.length) s3.push({ 'Date': 'Cancelled (not counted)', 'Platform': '', 'Delivery Partner': '', 'Parcels': cxl.length });
+      let cxl = [];
+      try { cxl = (await api('GET', { action: 'cancelledRange', from, to })).rows || []; } catch (e) {}
+      if (cxl.length) s3.push({ 'Date': 'Cancelled (removed)', 'Platform': '', 'Delivery Partner': '', 'Parcels': cxl.length });
       const w3 = XLSX.utils.json_to_sheet(s3); w3['!cols'] = [{ wch: 11 }, { wch: 10 }, { wch: 18 }, { wch: 9 }];
       XLSX.utils.book_append_sheet(wb, w3, PORTALS ? 'By Delivery Partner' : 'Summary');
       if (cxl.length) {
@@ -963,9 +967,11 @@
         beep(false); pulse(false); return;
       }
       applyEvent(j.event); store.set('used', used);
-      updateRow(j.row);
-      if (!cancelledRows.some(r => r.awb === j.row.awb)) cancelledRows.unshift(j.row);
-      cflash('ok', '✓ Cancelled · ' + awb, (j.row.platform || '') + (j.row.courier ? ' · ' + j.row.courier : '') + ' · ' + (why || reason) + '. Packet ' + j.row.packet + ' can be used again.');
+      const same = r => r.awb === j.row.awb && Number(r.ts) === Number(j.row.ts);
+      todayRows = todayRows.filter(r => !same(r)); viewRows = viewRows.filter(r => !same(r));
+      searchRows = searchRows.filter(r => !same(r)); if (!$('searchBox').hidden) searchRows.unshift(j.row);
+      if (!cancelledRows.some(same)) cancelledRows.unshift(j.row);
+      cflash('ok', '✓ Cancelled · removed from dispatch · ' + awb, (why || reason) + '. The AWB and packet ' + j.row.packet + ' can be scanned again.');
       beep(true); pulse(true);
       render(); renderCancelled(); renderSearch();
     } finally { busy = false; }
@@ -974,7 +980,7 @@
   async function loadCancelled() {
     try { const j = await api('GET', { action: 'cancelled', date: today() }); cancelledRows = (j.rows || []).sort((x, y) => (y.cancelledAt > x.cancelledAt ? 1 : -1)); }
     catch (err) {}
-    renderCancelled();
+    renderCancelled(); render();
   }
   function renderCancelled() {
     const isAdmin = user && user.role === 'admin';
@@ -986,9 +992,11 @@
     try {
       const j = await api('POST', { action: 'uncancel', awb, ts: Number(ts) || 0 });
       applyEvent(j.event); store.set('used', used);
-      updateRow(j.row);
-      cancelledRows = cancelledRows.filter(r => !(r.awb === awb && (!ts || Number(r.ts) === Number(ts))));
-      const msg = ['✓ Cancel undone · ' + awb, 'The parcel counts as dispatched again.'];
+      const back = r => r.awb === awb && (!ts || Number(r.ts) === Number(ts));
+      cancelledRows = cancelledRows.filter(r => !back(r));
+      searchRows = searchRows.map(r => back(r) && r.status === 'Cancelled' ? j.row : r);
+      if (j.row.date === today() && !todayRows.some(r => r.awb === awb && Number(r.ts) === Number(j.row.ts))) todayRows.unshift(j.row);
+      const msg = ['✓ Cancel undone · ' + awb, 'Back in the dispatch list.'];
       current === 'cancel' ? cflash('ok', ...msg) : flash('ok', ...msg);
       render(); renderCancelled(); renderSearch();
     } catch (err) { current === 'cancel' ? cflash('bad', '✗ ' + err.message) : flash('bad', '✗ Could not undo', err.message); }

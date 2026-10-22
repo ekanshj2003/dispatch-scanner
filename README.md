@@ -58,11 +58,10 @@ When **Meesho** is selected, tap the delivery partner under the top bar (Valmo, 
 ## Cancelled at pickup
 
 Open the **Cancel** tab, pick a reason (Order cancelled, Courier did not pick up, Damaged, Other) and scan the parcel's AWB (camera, barcode gun, or type it).
-- The parcel is marked **Cancelled** in the Sheet (Status column) and left out of all totals and manifest counts.
-- Its **packet barcode can be used again**.
-- **Courier did not pick up:** next day just scan the same AWB and packet again on **Scan**. It is saved as *Dispatched again*; the old cancelled entry stays as history.
-- **Other reasons:** scanning the AWB again asks *"Dispatch it again?"* – tap **Yes** only if it really goes out.
-- An admin can tap **Undo** if it was cancelled by mistake.
+- The parcel is **removed from Dispatch** and moved to the Sheet's **Cancelled** tab (with reason, who and when).
+- Totals, manifest counts and Excel only count real dispatches.
+- The AWB and packet barcode can be **scanned again** any time (e.g. next day when the courier comes) – it is a normal fresh scan.
+- An admin can tap **Undo** to put it back into Dispatch if it was cancelled by mistake.
 
 ## Deleting a wrong entry
 
