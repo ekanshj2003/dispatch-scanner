@@ -1,4 +1,4 @@
-/* Dispatch Scan Register – app logic (v7: cancel at pickup, search, delete frees codes).
+/* Dispatch Scan Register – app logic (v8: dispatch again after cancel).
    Talks to the Google Sheet script in google-sheet-script/Code.gs. */
 (function () {
   'use strict';
@@ -30,10 +30,10 @@
   let byAwb = {}, ordersLoaded = false, syncInfo = null;   // AWB -> {p, oid, items:[{sku, qty, title}]}
   let learned = store.get('learned', { awb: {}, ign: {} });
   let todayRows = [], viewRows = [], viewDay = today();
-  let pendingOrder = null;
+  let pendingOrder = null, pendingAgain = false;     // pendingAgain: this AWB was cancelled earlier and goes out again
   // Every AWB / packet code ever saved (code -> date). Kept on the phone so a repeat is blocked instantly.
   let used = store.get('used', { a: {}, p: {}, ts: 0 });
-  used.c = used.c || {}; used.ets = used.ets || 0;     // c = cancelled AWBs, ets = last change seen
+  used.c = used.c || {}; used.cr = used.cr || {}; used.ets = used.ets || 0;   // cr = cancel reason per AWB     // c = cancelled AWBs, ets = last change seen
   let cfg2 = store.get('settings', { meeshoCouriers: ['Valmo', 'Delhivery', 'Shadowfax', 'Xpressbees', 'Ecom Express', 'DTDC'], flipkartCouriers: ['Ekart', 'Delhivery', 'Shadowfax', 'Xpressbees'], uniquePacket: true });
   let courier = store.get('courier', '');
   let step = 1, pendingAwb = '', labelCodes = new Set(), busy = false, online = null;
@@ -102,7 +102,7 @@
     try {
       const r = await fetch(u + '?action=ping'); const j = await r.json();
       if (!j.ok || j.app !== 'dispatch-scanner') throw new Error('That link is not the dispatch script.');
-      if (!(j.v >= 5)) throw new Error('Paste the new Code.gs and deploy a new version.');
+      if (!(j.v >= 6)) throw new Error('Paste the new Code.gs and deploy a new version.');
       url = u; store.set('url', url);
       $('dMsg').className = 'msg ok'; $('dMsg').textContent = 'Connected. Now log in.';
       $('devDot').className = 'dot on'; $('devState').textContent = 'Device connected to Google Sheet';
@@ -197,7 +197,7 @@
     $('pickTitle').textContent = step === 1 ? 'More than one barcode in the box. Tap the AWB:' : 'More than one barcode in the box. Tap the packet barcode:';
   }
   function reset(msg) {
-    step = 1; pendingAwb = ''; pendingOrder = null; labelCodes = new Set(); closePick(); renderSteps();
+    step = 1; pendingAwb = ''; pendingOrder = null; pendingAgain = false; labelCodes = new Set(); closePick(); renderSteps();
     if (msg) flash('idle', msg, 'Scan the AWB on the shipping label.');
   }
   $('resetBtn').onclick = () => reset('Reset.');
@@ -237,6 +237,31 @@
     $('syncBtn').hidden = !(PORTALS && user && user.role === 'admin' && syncInfo && syncInfo.flipkart);
   }
 
+  /* ================= dispatching a cancelled AWB again ================= */
+  function startAgain(code, why) {
+    if (platform === 'Meesho' && !courier) { flash('warn', 'Pick the delivery partner first', 'Then scan the AWB again.'); $('courierRow').classList.add('need'); return; }
+    pendingAwb = code; pendingOrder = null; pendingAgain = true; step = 2;
+    labelCodes = new Set(recentCodes()); labelCodes.add(code);
+    renderSteps();
+    flash('warn', '↻ Dispatching again · AWB ' + code, why + ' ' + fmtDay(used.c[code]) + '. Now scan the packet barcode.');
+  }
+  function askAgain(code, why) {
+    if (picking) return;
+    picking = true;
+    $('pickTitle').textContent = 'AWB ' + code + ' was cancelled ' + fmtDay(used.c[code]) + ' (' + why + '). Dispatch it again?';
+    $('pickList').innerHTML = '<button type="button" data-yes="1" style="font-family:inherit">Yes, dispatch again<small>Saved as a new dispatch today</small></button>' +
+      '<button type="button" data-none="1" style="font-family:inherit"><small>No, keep it cancelled</small></button>';
+    $('pickList').onclick = e => {
+      const b = e.target.closest('button'); if (!b) return;
+      closePick(); renderSteps();
+      if (b.dataset.yes) { startAgain(code, why); beep(true); }
+      else flash('idle', 'AWB ' + code + ' stays cancelled.', 'Scan the next AWB.');
+    };
+    $('pick').hidden = false;
+    flash('warn', 'AWB ' + code + ' was cancelled', 'Tap Yes on the camera box to dispatch it again.');
+    beep(false);
+  }
+
   /* ================= saving a scan ================= */
   const fmtDay = d => d === today() ? 'today' : d ? 'on ' + d.split('-').reverse().join('-') : 'before';
   const usedAwbDay = c => used.a[c] || (queue.find(r => r.awb === c) || {}).date || (todayRows.find(r => r.awb === c) || {}).date || '';
@@ -244,13 +269,17 @@
   // Apply a delete / cancel / undo to the phone's list of used codes.
   function applyEvent(ev) {
     if (!ev || !ev.awb) return;
-    if (ev.type === 'deleted') { delete used.a[ev.awb]; if (ev.packet) delete used.p[ev.packet]; delete used.c[ev.awb]; }
-    else if (ev.type === 'cancelled') { used.a[ev.awb] = used.a[ev.awb] || ev.date || ev.at; if (ev.packet) delete used.p[ev.packet]; used.c[ev.awb] = ev.at || today(); }
-    else if (ev.type === 'uncancelled') { used.a[ev.awb] = used.a[ev.awb] || ev.date || ev.at; if (ev.packet) used.p[ev.packet] = ev.date || ev.at; delete used.c[ev.awb]; }
+    const k = ev.awb, af = ev.after || {};
+    if ((ev.type === 'deleted' || ev.type === 'cancelled') && ev.packet) delete used.p[ev.packet];
+    if (ev.type === 'uncancelled' && ev.packet) used.p[ev.packet] = ev.date || ev.at;
+    const state = af.s || (ev.type === 'deleted' ? 'none' : ev.type === 'cancelled' ? 'cancelled' : 'active');
+    if (state === 'none') { delete used.a[k]; delete used.c[k]; delete used.cr[k]; }
+    else if (state === 'active') { used.a[k] = af.d || used.a[k] || ev.date || ev.at; if (af.p) used.p[af.p] = af.d || ev.at; delete used.c[k]; delete used.cr[k]; }
+    else { used.a[k] = used.a[k] || af.d || ev.date || ev.at; used.c[k] = af.at || ev.at || today(); used.cr[k] = af.r || ev.reason || ''; }
   }
   const knownAwb = c => !!usedAwbDay(c);
   function markUsed(rec) {
-    used.a[rec.awb] = rec.date; used.p[rec.packet] = rec.date;
+    used.a[rec.awb] = rec.date; used.p[rec.packet] = rec.date; delete used.c[rec.awb]; delete used.cr[rec.awb];
     store.set('used', used);
   }
 
@@ -262,7 +291,11 @@
     try {
       if (step === 1) {
         const aDay = usedAwbDay(code), pDay = usedPktDay(code);
-        if (aDay && used.c[code]) { flash('bad', '✗ AWB ' + code + ' was cancelled', 'Cancelled ' + fmtDay(used.c[code]) + '. A cancelled AWB cannot be dispatched again.'); beep(false); pulse(false); return; }
+        if (aDay && used.c[code]) {
+          const why = used.cr[code] || 'Cancelled';
+          if (/pick/i.test(why)) { startAgain(code, why); beep(true); pulse(true); return; }       // not picked up: just scan again
+          askAgain(code, why); return;                                                          // other reasons: ask first
+        }
         if (aDay) { flash('bad', '✗ AWB ' + code + ' already scanned', 'It was dispatched ' + fmtDay(aDay) + '. An AWB can be scanned only once.'); beep(false); pulse(false); return; }
         if (pDay || products[code]) { flash('bad', '✗ That is a packet barcode', (pDay ? 'Already used ' + fmtDay(pDay) + '. ' : '') + 'Scan the AWB on the shipping label first.'); beep(false); pulse(false); return; }
         const ord = findOrder(code);
@@ -291,13 +324,14 @@
         const check = !ord ? (ordersLoaded && syncInfo && syncInfo.flipkart ? 'NO ORDER' : '') : !pSku ? 'NO CODE' : 'OK';
         const ts = Date.now();
         const rec = { awb: pendingAwb, packet: code, platform, ts, date: today(), time: fmtTime(ts), product: products[code] || (ord && ord.items.length === 1 ? itemLabel(ord.items[0]) : ''), by: user ? user.name : '',
-          orderId: ord ? ord.oid : '', orderSku: want.join(', '), check, courier: platform === 'Meesho' ? courier : (ord && ord.c) || '' };
-        step = 1; pendingAwb = ''; pendingOrder = null; labelCodes = new Set(); renderSteps();
+          redispatch: pendingAgain || undefined, orderId: ord ? ord.oid : '', orderSku: want.join(', '), check, courier: platform === 'Meesho' ? courier : (ord && ord.c) || '' };
+        const wasAgain = pendingAgain;
+        step = 1; pendingAwb = ''; pendingOrder = null; pendingAgain = false; labelCodes = new Set(); renderSteps();
         // Save on the phone first and upload in the background, so the next parcel can be scanned at once.
         queue.push(rec); store.set('queue', queue); markUsed(rec);
         if (check === 'OK') flash('ok', '✓ Correct · Saved · ' + rec.awb, rec.product || orderLabel(ord));
         else if (check === 'NO CODE') flash('warn', '✓ Saved · ' + rec.awb + ' · not checked', 'Packet ' + code + ' is not linked to a SKU yet.');
-        else if (!PORTALS) flash('ok', '✓ Saved · ' + platform + (rec.courier ? ' · ' + rec.courier : '') + ' · ' + rec.awb, 'Packet ' + code);
+        else if (!PORTALS) flash('ok', (wasAgain ? '✓ Dispatched again · ' : '✓ Saved · ') + platform + (rec.courier ? ' · ' + rec.courier : '') + ' · ' + rec.awb, 'Packet ' + code);
         else flash(rec.product ? 'ok' : 'warn', '✓ Saved · ' + platform + ' · ' + rec.awb, rec.product || 'New packet code ' + code + (user && user.role === 'admin' ? '. Name it in Codes.' : '. Ask admin to name it.'));
         beep(true); pulse(true);
         render();
@@ -652,13 +686,13 @@
     const when = opts.showDate ? (r.date || '').split('-').reverse().slice(0, 2).join('/') + ' ' + (r.time || '').slice(0, 5) : (r.time || fmtTime(r.ts)).slice(0, 5);
     const pills = `<span class="pill ${esc(r.platform)}">${r.platform === 'Meesho' ? 'MS' : 'FK'}</span>` +
       (r.waiting ? (online === false ? '<span class="pill wait">Waiting</span>' : '<span class="pill wait">Sending</span>') : '') +
-      (cx ? '<span class="pill cx">Cancelled</span>' : '');
+      (cx ? '<span class="pill cx">Cancelled</span>' : '') + (!cx && r.check === 'DISPATCHED AGAIN' ? '<span class="pill wait">Again</span>' : '');
     const info = `<span class="awb">${esc(r.packet)}</span>${r.courier ? `<span class="by">${esc(r.courier)}</span>` : ''}<span class="by">${esc(r.by)}</span>` +
       (cx ? `<span class="by" style="color:var(--bad)">${esc(r.cancelReason || 'Cancelled')} · ${esc((r.cancelledAt || '').slice(5).split(' ')[0].split('-').reverse().join('/'))} ${esc((r.cancelledAt || '').slice(11))} · ${esc(r.cancelledBy || '')}</span>` : '');
     const acts = [];
     if (!r.waiting && opts.cancelBtn && !cx) acts.push(`<button class="del" data-cx="${esc(r.awb)}">Cancel</button>`);
-    if (!r.waiting && cx && isAdmin && opts.undoBtn !== false) acts.push(`<button class="del" data-undo="${esc(r.awb)}">Undo</button>`);
-    if (!r.waiting && isAdmin && opts.delBtn !== false) acts.push(`<button class="del" data-del="${esc(r.awb)}">Delete</button>`);
+    if (!r.waiting && cx && isAdmin && opts.undoBtn !== false) acts.push(`<button class="del" data-undo="${esc(r.awb)}" data-ts="${esc(r.ts)}">Undo</button>`);
+    if (!r.waiting && isAdmin && opts.delBtn !== false) acts.push(`<button class="del" data-del="${esc(r.awb)}" data-ts="${esc(r.ts)}">Delete</button>`);
     return `<tr class="${cx ? 'cancelled' : ''}"><td class="mono">${esc(when)}</td><td>${pills}<div class="awb">${esc(r.awb)}</div></td><td>${info}</td><td class="n"><div class="acts">${acts.join('')}</div></td></tr>`;
   }
 
@@ -719,12 +753,14 @@
       b.disabled = true;
       try {
         if (d) {
-          const j = await api('POST', { action: 'delete', awb: d.dataset.del });
-          const gone = [todayRows, viewRows, searchRows].flat().find(r => r.awb === d.dataset.del);
+          const dts = Number(d.dataset.ts) || 0, same = r => r.awb === d.dataset.del && (!dts || Number(r.ts) === dts);
+          const j = await api('POST', { action: 'delete', awb: d.dataset.del, ts: dts });
+          const gone = [todayRows, viewRows, searchRows].flat().find(same);
           applyEvent(j.event || { type: 'deleted', awb: d.dataset.del, packet: gone ? gone.packet : '' }); store.set('used', used);
-          todayRows = todayRows.filter(r => r.awb !== d.dataset.del); viewRows = viewRows.filter(r => r.awb !== d.dataset.del);
-          searchRows = searchRows.filter(r => r.awb !== d.dataset.del); renderSearch();
-          flash('ok', 'Deleted ' + d.dataset.del, 'This AWB and its packet barcode can be scanned again.');
+          todayRows = todayRows.filter(r => !same(r)); viewRows = viewRows.filter(r => !same(r));
+          searchRows = searchRows.filter(r => !same(r)); cancelledRows = cancelledRows.filter(r => !same(r)); renderSearch(); renderCancelled();
+          const left = j.event && j.event.after && j.event.after.s;
+          flash('ok', 'Deleted ' + d.dataset.del, left === 'cancelled' ? 'Its earlier cancelled entry is kept. Scan it again to dispatch.' : 'This AWB and its packet barcode can be scanned again.');
         } else {
           await api('POST', { action: 'deleteProduct', code: pd.dataset.pdel });
           delete products[pd.dataset.pdel]; delete skus[pd.dataset.pdel]; store.set('products', products); store.set('skus', skus);
@@ -761,7 +797,8 @@
     try {
       const j = await api('GET', { action: 'used', since: used.ts || 0, esince: used.ets || 0 });
       if (j.full) { used.a = {}; used.p = {}; used.c = {}; queue.forEach(r => { used.a[r.awb] = r.date; used.p[r.packet] = r.date; }); }
-      Object.assign(used.a, j.awbs || {}); Object.assign(used.p, j.packets || {}); Object.assign(used.c, j.cancelled || {});
+      Object.assign(used.a, j.awbs || {}); Object.assign(used.p, j.packets || {}); Object.assign(used.c, j.cancelled || {}); Object.assign(used.cr, j.reasons || {});
+      (j.live || []).forEach(k => { delete used.c[k]; delete used.cr[k]; });
       (j.events || []).sort((x, y) => x.t - y.t).forEach(applyEvent);
       used.ts = j.latest || used.ts; used.ets = j.elatest || used.ets; store.set('used', used);
     } catch (err) {} finally { usedLoading = false; }
@@ -812,7 +849,7 @@
           flash('bad', '✗ ' + what + ' – not saved', 'Found in the Sheet: ' + (e.date || '') + ' ' + (e.time || '') + ' · ' + (e.by || '') + '. Check this parcel.');
           beep(false); pulse(false);
         } else {
-          todayRows = todayRows.filter(r => r.awb !== rec.awb);
+          todayRows = todayRows.filter(r => !(r.awb === rec.awb && Number(r.ts) === Number(rec.ts)));
           todayRows.unshift(j.row || rec);
           setConn('on');
         }
@@ -852,7 +889,7 @@
       const s1 = list.map((r, i) => PORTALS
         ? ({ 'S.No': i + 1, 'Date': r.date, 'Time': r.time, 'Platform': r.platform, 'AWB Number': r.awb, 'Packet Barcode': r.packet, 'Product': nameOf(r), 'Scanned By': r.by, 'Order ID': r.orderId || '', 'Order SKU': r.orderSku || '', 'Check': r.check || '', 'Delivery Partner': r.courier || '' })
         : ({ 'S.No': i + 1, 'Date': r.date, 'Time': r.time, 'Platform': r.platform, 'Delivery Partner': r.courier || '', 'AWB Number': r.awb, 'Packet Barcode': r.packet, 'Scanned By': r.by,
-             'Status': r.status === 'Cancelled' ? 'Cancelled' : 'Dispatched', 'Cancelled At': r.cancelledAt || '', 'Cancelled By': r.cancelledBy || '', 'Cancel Reason': r.cancelReason || '' }));
+             'Status': r.status === 'Cancelled' ? 'Cancelled' : r.check === 'DISPATCHED AGAIN' ? 'Dispatched again' : 'Dispatched', 'Cancelled At': r.cancelledAt || '', 'Cancelled By': r.cancelledBy || '', 'Cancel Reason': r.cancelReason || '' }));
       const agg = {};
       list.forEach(r => { const k = [r.date, r.platform, nameOf(r) || ('Unnamed ' + r.packet)].join('|'); agg[k] = (agg[k] || 0) + 1; });
       const s2 = Object.keys(agg).sort().map(k => { const [d, p, n] = k.split('|'); return { 'Date': d, 'Platform': p, 'Product': n, 'Packets': agg[k] }; });
@@ -906,7 +943,7 @@
   function cflash(kind, title, sub) { const f = $('cflash'); f.className = 'flash ' + kind; f.innerHTML = '<b>' + esc(title) + '</b><span>' + esc(sub || '') + '</span>'; }
   let cancelledRows = [];
   function updateRow(row) {
-    [todayRows, viewRows, searchRows, cancelledRows].forEach(list => { const i = list.findIndex(r => r.awb === row.awb); if (i >= 0) list[i] = Object.assign({}, list[i], row); });
+    [todayRows, viewRows, searchRows, cancelledRows].forEach(list => { const i = list.findIndex(r => r.awb === row.awb && (!row.ts || Number(r.ts) === Number(row.ts))); if (i >= 0) list[i] = Object.assign({}, list[i], row); });
   }
   async function cancelCode(code, why) {
     if (busy) return;
@@ -916,7 +953,7 @@
       const viaPkt = [todayRows, viewRows].flat().find(r => r.packet === code && r.status !== 'Cancelled');
       const awb = usedAwbDay(code) ? code : viaPkt ? viaPkt.awb : code;
       if (queue.some(r => r.awb === awb)) { cflash('warn', 'Still uploading ' + awb, 'Wait a few seconds, then scan again.'); beep(false); syncQueue(); return; }
-      if (used.c[awb]) { cflash('warn', 'AWB ' + awb + ' is already cancelled', 'Cancelled ' + fmtDay(used.c[awb]) + '.'); beep(false); return; }
+      if (used.c[awb]) { cflash('warn', 'AWB ' + awb + ' is already cancelled', 'Cancelled ' + fmtDay(used.c[awb]) + '. To send it again, scan it on the Scan tab.'); beep(false); return; }
       cflash('idle', 'Cancelling ' + awb + '…', why || reason);
       let j;
       try { j = await api('POST', { action: 'cancel', awb, reason: why || reason }); }
@@ -945,12 +982,12 @@
     setHTML($('cList'), cancelledRows.length ? cancelledRows.map(r => rowHTML(r, isAdmin, { showDate: true, delBtn: false })).join('')
       : '<tr><td class="empty">No parcels cancelled today.</td></tr>');
   }
-  async function undoCancel(awb) {
+  async function undoCancel(awb, ts) {
     try {
-      const j = await api('POST', { action: 'uncancel', awb });
+      const j = await api('POST', { action: 'uncancel', awb, ts: Number(ts) || 0 });
       applyEvent(j.event); store.set('used', used);
       updateRow(j.row);
-      cancelledRows = cancelledRows.filter(r => r.awb !== awb);
+      cancelledRows = cancelledRows.filter(r => !(r.awb === awb && (!ts || Number(r.ts) === Number(ts))));
       const msg = ['✓ Cancel undone · ' + awb, 'The parcel counts as dispatched again.'];
       current === 'cancel' ? cflash('ok', ...msg) : flash('ok', ...msg);
       render(); renderCancelled(); renderSearch();
@@ -1000,7 +1037,7 @@
     }
     b.disabled = true;
     if (c) cancelCode(c.dataset.cx).finally(() => { setText($('sCount'), $('cflash').querySelector('b').textContent); });
-    else undoCancel(u.dataset.undo).finally(() => { if (current === 'today') setText($('sCount'), 'Cancel undone · ' + u.dataset.undo); });
+    else undoCancel(u.dataset.undo, u.dataset.ts).finally(() => { if (current === 'today') setText($('sCount'), 'Cancel undone · ' + u.dataset.undo); });
   });
 
   /* ================= signed manifest ================= */
