@@ -116,7 +116,11 @@
       <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg>
       <input type="search" id="q" placeholder="Search AWB or packet barcode" autocomplete="off" autocapitalize="characters" spellcheck="false" aria-label="Search AWB or packet barcode">
       <button type="button" class="btn ghost" id="qClear" hidden>Clear</button>
+      <button type="button" class="btn qscan" id="qScan" aria-label="Scan to search"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7V4h3M21 7V4h-3M3 17v3h3M21 17v3h-3M7 8v8M10 8v8M13 8v8M17 8v8"/></svg>Scan</button>
     </form>
+    <div id="searchSlot" class="stack" hidden>
+      <p class="small muted" id="qScanHint">Hold the AWB or packet barcode inside the box.</p>
+    </div>
     <div id="searchBox" class="stack" hidden>
       <div class="row between"><h2>Search results</h2><span class="muted small" id="sCount"></span></div>
       <div class="card"><div class="scroll"><table class="log"><tbody id="sList"></tbody></table></div></div>
@@ -138,7 +142,13 @@
     <div class="card"><div class="scroll"><table>
       <thead><tr><th>Delivery partner</th><th class="n">Parcels</th></tr></thead>
       <tbody id="byCourier"></tbody></table></div></div>
-    <div class="row between"><h2>Dispatch log</h2><span class="muted small" id="logCount"></span></div>
+    <div class="row between"><h2>Dispatch log</h2><div class="row"><span class="muted small" id="logCount"></span><button type="button" class="chip" id="selBtn" hidden>Select</button></div></div>
+    <div class="selbar" id="selBar" hidden>
+      <label class="selall"><input type="checkbox" id="selAll"> All</label>
+      <span id="selCount">0 selected</span>
+      <button type="button" class="btn danger" id="selDel" disabled>Delete</button>
+      <button type="button" class="btn ghost" id="selDone">Done</button>
+    </div>
     <div class="card"><div class="scroll"><table class="log">
       <thead><tr><th>Time</th><th>AWB</th><th>Packet · by</th><th></th></tr></thead>
       <tbody id="log"></tbody></table></div></div>

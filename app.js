@@ -1,4 +1,4 @@
-/* Dispatch Scan Register – app logic (v9: cancel removes the parcel from dispatch).
+/* Dispatch Scan Register – app logic (v10: delete many at once, scan to search).
    Talks to the Google Sheet script in google-sheet-script/Code.gs. */
 (function () {
   'use strict';
@@ -134,6 +134,7 @@
   function go(view) {
     current = view;
     ['scan', 'today', 'cancel', 'manifest', 'excel', 'codes'].forEach(v => { $('v-' + v).hidden = v !== view; });
+    if (view !== 'today') { if (!$('searchSlot').hidden) { $('searchSlot').hidden = true; $('qScan').setAttribute('aria-pressed', 'false'); $('qScan').lastChild.textContent = 'Scan'; } if (selMode) setSelMode(false); }
     placeStage(view);
     if (view === 'cancel') { renderReasons(); loadCancelled(); }
     if (view === 'manifest') { $('mfPlatform').value = platform; fillMfCouriers(true); loadManifests(); }
@@ -288,6 +289,7 @@
     code = String(code || '').trim();
     if (!code || busy) return;
     if (current === 'cancel') return cancelCode(code);
+    if (current === 'today') { $('q').value = code; runSearch(); stopSearchCam(); beep(true); return; }
     busy = true;
     try {
       if (step === 1) {
@@ -470,7 +472,9 @@
     if (!ready.length) return;
     const pick = current === 'cancel'
       ? ((ready.find(c => usedAwbDay(c.code)) || (ready.length === 1 ? ready[0] : null)) || {}).code
-      : choose(ready);
+      : current === 'today'
+        ? (ready.find(c => used.a[c.code] || used.p[c.code]) || ready[0]).code
+        : choose(ready);
     if (pick) {
       recent.set(pick, now); cooldown(450);
       $('stage').classList.add('locked'); setTimeout(() => $('stage').classList.remove('locked'), 400);
@@ -690,6 +694,10 @@
       (cx ? '<span class="pill cx">Cancelled</span>' : '') + (!cx && r.check === 'DISPATCHED AGAIN' ? '<span class="pill wait">Again</span>' : '');
     const info = `<span class="awb">${esc(r.packet)}</span>${r.courier ? `<span class="by">${esc(r.courier)}</span>` : ''}<span class="by">${esc(r.by)}</span>` +
       (cx ? `<span class="by" style="color:var(--bad)">${esc(r.cancelReason || 'Cancelled')} · ${esc((r.cancelledAt || '').slice(5).split(' ')[0].split('-').reverse().join('/'))} ${esc((r.cancelledAt || '').slice(11))} · ${esc(r.cancelledBy || '')}</span>` : '');
+    if (opts.select) {
+      const key = r.awb + '|' + r.ts, on = selected.has(key);
+      return `<tr class="selectable${on ? ' sel' : ''}" data-key="${esc(key)}"><td class="mono">${esc(when)}</td><td>${pills}<div class="awb">${esc(r.awb)}</div></td><td>${info}</td><td class="n">${r.waiting ? '' : `<input type="checkbox" data-pick="${esc(key)}" ${on ? 'checked' : ''} aria-label="Select ${esc(r.awb)}">`}</td></tr>`;
+    }
     const acts = [];
     if (!r.waiting && opts.cancelBtn && !cx) acts.push(`<button class="del" data-cx="${esc(r.awb)}">Cancel</button>`);
     if (!r.waiting && cx && isAdmin && opts.undoBtn !== false) acts.push(`<button class="del" data-undo="${esc(r.awb)}" data-ts="${esc(r.ts)}">Undo</button>`);
@@ -735,7 +743,9 @@
       ? names.map(n => `<tr><td>${esc(n)}</td><td class="n">${v.by[n].f}</td><td class="n">${v.by[n].m}</td><td class="n"><b>${v.by[n].f + v.by[n].m}</b></td></tr>`).join('')
       : `<tr><td colspan="4" class="empty">No packets${isToday ? ' yet today' : ' on this day'}.</td></tr>`);
     setText($('logCount'), all.length + ' packet' + (all.length === 1 ? '' : 's'));
-    setHTML($('log'), all.length ? all.map(r => rowHTML(r, isAdmin)).join('') : `<tr><td colspan="4" class="empty">Nothing scanned${isToday ? ' yet today. Go to Scan and scan the first AWB.' : ' on this day.'}</td></tr>`);
+    logRows = all.filter(r => !r.waiting);
+    $('selBtn').hidden = !(isAdmin && logRows.length) || selMode;
+    setHTML($('log'), all.length ? all.map(r => rowHTML(r, isAdmin, { select: selMode })).join('') : `<tr><td colspan="4" class="empty">Nothing scanned${isToday ? ' yet today. Go to Scan and scan the first AWB.' : ' on this day.'}</td></tr>`);
 
     const pk = Object.keys(products).sort((a, b) => products[a].localeCompare(products[b]));
     setHTML($('prods'), pk.length
@@ -929,6 +939,7 @@
   function placeStage(view) {
     const st = $('stage');
     if (view === 'cancel' && st.parentNode !== $('cancelSlot')) { closePick(); $('cancelSlot').appendChild(st); }
+    else if (view === 'today' && st.parentNode !== $('searchSlot')) { closePick(); $('searchSlot').insertBefore(st, $('qScanHint')); }
     else if (view === 'scan' && st.parentNode !== stageHome.parent) stageHome.parent.insertBefore(st, stageHome.next);
   }
 
@@ -1001,6 +1012,77 @@
       render(); renderCancelled(); renderSearch();
     } catch (err) { current === 'cancel' ? cflash('bad', '✗ ' + err.message) : flash('bad', '✗ Could not undo', err.message); }
   }
+
+  /* ================= scan to search (Today tab) ================= */
+  function stopSearchCam() {
+    if ($('searchSlot').hidden) return;
+    $('searchSlot').hidden = true; $('qScan').setAttribute('aria-pressed', 'false'); $('qScan').lastChild.textContent = 'Scan';
+    if (current === 'today') stopCam();
+  }
+  $('qScan').onclick = async () => {
+    if (!$('searchSlot').hidden) { stopSearchCam(); return; }
+    placeStage('today');
+    $('searchSlot').hidden = false; $('qScan').setAttribute('aria-pressed', 'true'); $('qScan').lastChild.textContent = 'Stop';
+    await startCam();
+    if (!camOn) stopSearchCam();
+  };
+
+  /* ================= delete many at once (Today tab, admin) ================= */
+  let selMode = false, logRows = [];
+  const selected = new Set();
+  function setSelMode(on) {
+    selMode = on; selected.clear();
+    $('selBar').hidden = !on; $('selAll').checked = false;
+    updateSel(); render();
+  }
+  function updateSel() {
+    const n = selected.size;
+    setText($('selCount'), n + ' selected');
+    $('selDel').disabled = !n; $('selDel').classList.remove('arm');
+    $('selDel').textContent = n ? 'Delete ' + n : 'Delete';
+    $('selAll').checked = n > 0 && n === logRows.length;
+  }
+  $('selBtn').onclick = () => setSelMode(true);
+  $('selDone').onclick = () => setSelMode(false);
+  $('selAll').onchange = e => {
+    selected.clear();
+    if (e.target.checked) logRows.forEach(r => selected.add(r.awb + '|' + r.ts));
+    updateSel(); render();
+  };
+  $('log').addEventListener('click', e => {
+    if (!selMode) return;
+    const tr = e.target.closest('tr[data-key]'); if (!tr) return;
+    const key = tr.dataset.key;
+    if (e.target.matches('input[type=checkbox]')) { e.target.checked ? selected.add(key) : selected.delete(key); }
+    else { selected.has(key) ? selected.delete(key) : selected.add(key); }
+    updateSel(); render();
+  });
+  $('selDel').onclick = async () => {
+    const b = $('selDel'), n = selected.size;
+    if (!n) return;
+    if (!b.classList.contains('arm')) {                         // second tap confirms
+      b.classList.add('arm'); b.textContent = 'Sure? Delete ' + n;
+      setTimeout(() => { if (b.classList.contains('arm')) updateSel(); }, 4000);
+      return;
+    }
+    b.disabled = true; b.textContent = 'Deleting…';
+    const items = [...selected].map(k => { const i = k.lastIndexOf('|'); return { awb: k.slice(0, i), ts: Number(k.slice(i + 1)) || 0 }; });
+    try {
+      const j = await api('POST', { action: 'deleteMany', items });
+      (j.events || []).forEach(applyEvent); store.set('used', used);
+      const gone = new Set((j.done || []).map(d => d.awb + '|' + d.ts));
+      const keep = r => !gone.has(r.awb + '|' + r.ts);
+      todayRows = todayRows.filter(keep); viewRows = viewRows.filter(keep); searchRows = searchRows.filter(keep);
+      setSelMode(false);
+      const nf = (j.failed || []).length;
+      flash(nf ? 'warn' : 'ok', '✓ Deleted ' + gone.size + ' entr' + (gone.size === 1 ? 'y' : 'ies') + (nf ? ' · ' + nf + ' failed' : ''),
+        nf ? j.failed.map(f => f.awb).join(', ') : 'Their AWBs and packet barcodes can be scanned again.');
+      setText($('logCount'), '✓ Deleted ' + gone.size + (nf ? ' · ' + nf + ' failed' : ''));
+      setTimeout(render, 2500);
+    } catch (err) {
+      updateSel(); setText($('selCount'), 'Not deleted: ' + err.message);
+    }
+  };
 
   /* ================= search ================= */
   let searchRows = [], searchTimer = 0, searchSeq = 0;

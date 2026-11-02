@@ -186,3 +186,18 @@ tr.cancelled .awb{text-decoration:line-through;opacity:.75}
 .cancel-note{font-size:13.5px;color:var(--bad);font-weight:600}
 .acts{display:flex;flex-direction:column;gap:4px;align-items:flex-end}
 .tabs button{font-size:11px;padding-left:2px;padding-right:2px}
+
+/* ---------- search scan + multi delete ---------- */
+.search .qscan{display:inline-flex;align-items:center;gap:6px;padding:7px 12px;background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+.search .qscan svg{width:18px;height:18px;stroke:currentColor}
+.search .qscan[aria-pressed=true]{background:var(--bad);border-color:var(--bad)}
+#searchSlot .stage{max-height:34vh}
+.selbar{position:sticky;top:0;z-index:5;display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:8px 10px;box-shadow:0 4px 14px rgb(0 0 0 / .08)}
+.selbar #selCount{flex:1;font-weight:600;font-size:14px}
+.selall{display:flex;align-items:center;gap:6px;font-weight:600;font-size:14px;cursor:pointer}
+.btn.danger{background:var(--bad);border-color:var(--bad);color:#fff}
+.btn.danger:disabled{opacity:.45}
+input[type=checkbox]{width:22px;height:22px;accent-color:var(--bad);cursor:pointer}
+tr.sel td{background:var(--bad-soft)}
+tr.selectable{cursor:pointer}
+#searchSlot #camStop{display:none}

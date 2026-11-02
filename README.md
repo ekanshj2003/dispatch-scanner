@@ -63,13 +63,13 @@ Open the **Cancel** tab, pick a reason (Order cancelled, Courier did not pick up
 - The AWB and packet barcode can be **scanned again** any time (e.g. next day when the courier comes) – it is a normal fresh scan.
 - An admin can tap **Undo** to put it back into Dispatch if it was cancelled by mistake.
 
-## Deleting a wrong entry
+## Deleting wrong entries
 
-In **Today** (admin), tap **Delete** then **Sure?**. Both the AWB and the packet barcode can be scanned again straight away, on every phone. Every delete and cancel is recorded in the Sheet's **Changes Log** tab.
+In **Today** (admin), tap **Delete** then **Sure?** on one entry. To delete several: tap **Select** above the Dispatch log, tick the wrong entries (or **All**), tap **Delete N**, then **Sure?**. Both the AWB and the packet barcode can be scanned again straight away, on every phone. Every delete and cancel is recorded in the Sheet's **Changes Log** tab.
 
 ## Search
 
-Type or scan any part of an AWB or packet barcode in the box at the top of **Today**. It searches all dates and shows the status, delivery partner and who scanned it, with Cancel / Undo / Delete buttons.
+Type any part of an AWB or packet barcode in the box at the top of **Today**, or tap **Scan** next to it and hold the barcode in front of the camera (a barcode gun also works on the Today tab). It searches all dates and shows the status, delivery partner and who scanned it, with Cancel / Undo / Delete buttons.
 
 ## Signed manifest
 
